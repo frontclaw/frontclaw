@@ -24,7 +24,7 @@ export default function FrontclawLanding() {
   const y = useTransform(scrollYProgress, [0, 1], [0, -50]);
 
   return (
-    <div className="min-h-screen bg-[#050505] text-zinc-100 flex justify-center items-start p-2 md:p-6 lg:p-12 selection:bg-cyan-500/30">
+    <div className="min-h-screen bg-[#050505] text-zinc-100 flex justify-center items-start selection:bg-cyan-500/30">
       {/* Background Ambience (Behind the Box) */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <GlowingOrb
@@ -45,7 +45,7 @@ export default function FrontclawLanding() {
       </div>
 
       {/* Main "Boxed" Container */}
-      <main className="relative z-10 w-full max-w-[1400px] bg-black/40 backdrop-blur-2xl rounded-[2rem] border border-white/10 shadow-[0_0_50px_-12px_rgba(0,0,0,0.8)] overflow-hidden">
+      <main className="relative z-10 w-full max-w-[1400px] bg-black/40 backdrop-blur-2xl border border-t-0 border-white/10 shadow-[0_0_50px_-12px_rgba(0,0,0,0.8)] overflow-hidden">
         <Navbar />
 
         {/* Hero Section */}

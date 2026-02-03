@@ -3,7 +3,7 @@ import Image from "next/image";
 export const Navbar = () => (
   <nav className="flex items-center justify-between px-8 py-6 border-b border-white/5 bg-black/20 backdrop-blur-md sticky top-0 z-50">
     <div className="flex items-center gap-2">
-      <Image src={"/logo.png"} alt="Logo" width={80} height={80} />
+      <Image src={"/logo.png"} alt="Logo" width={50} height={50} />
       <span className="text-xl font-bold tracking-tight text-white">
         frontclaw
       </span>
