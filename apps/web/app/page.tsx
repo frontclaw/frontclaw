@@ -108,7 +108,7 @@ export default function FrontclawLanding() {
         </section>
 
         {/* Floating Interface Preview */}
-        <section className="px-6 pb-24 relative z-20">
+        <section className="px-6 pb-24 relative z-20 -mt-10">
           <motion.div
             style={{ y }}
             className="max-w-5xl mx-auto rounded-xl p-1 bg-gradient-to-b from-white/10 to-transparent"

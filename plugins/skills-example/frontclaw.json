@@ -1,0 +1,16 @@
+{
+  "id": "skills-example",
+  "name": "Skills Example",
+  "version": "1.0.0",
+  "description": "Minimal example plugin that exposes a skill",
+  "author": {
+    "name": "Frontclaw Team"
+  },
+  "priority": 50,
+  "permissions": {
+    "skills": ["echo"]
+  },
+  "main": "index.ts",
+  "tags": ["example", "skills"],
+  "enabled": true
+}

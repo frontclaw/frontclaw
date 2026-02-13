@@ -1,0 +1,86 @@
+{
+  "id": "security-guardian",
+  "name": "Security Guardian",
+  "version": "1.0.0",
+  "description": "Protects against prompt injection, jailbreaking attempts, and enforces markdown rules",
+  "author": {
+    "name": "Frontclaw Team"
+  },
+  "priority": 0,
+  "permissions": {
+    "llm": {
+      "can_intercept_task": true,
+      "can_modify_prompt": true,
+      "can_modify_system_message": true
+    },
+    "api": {
+      "routes": ["GET,POST /security/stats", "GET /security/config"]
+    },
+    "log": {
+      "enabled": true,
+      "levels": ["info", "warn", "error"]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "abuse_threshold": {
+        "type": "number",
+        "description": "Threshold for abuse detection (0-1)",
+        "default": 0.8
+      },
+      "forbidden_patterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Patterns that indicate prompt injection attempts"
+      },
+      "markdown_rules": {
+        "type": "object",
+        "properties": {
+          "allow_html": { "type": "boolean", "default": false },
+          "max_header_level": { "type": "number", "default": 2 },
+          "block_images": { "type": "boolean", "default": true },
+          "block_links": { "type": "boolean", "default": false },
+          "max_code_block_lines": { "type": "number", "default": 100 }
+        }
+      },
+      "rate_limit": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "max_requests_per_minute": { "type": "number", "default": 60 }
+        }
+      }
+    }
+  },
+  "defaultConfig": {
+    "abuse_threshold": 0.8,
+    "forbidden_patterns": [
+      "ignore previous instructions",
+      "ignore all previous",
+      "disregard your instructions",
+      "forget your rules",
+      "system override",
+      "jailbreak",
+      "DAN mode",
+      "developer mode",
+      "pretend you are",
+      "act as if you have no restrictions",
+      "bypass your filters"
+    ],
+    "markdown_rules": {
+      "allow_html": false,
+      "max_header_level": 2,
+      "block_images": true,
+      "block_links": false,
+      "max_code_block_lines": 100
+    },
+    "rate_limit": {
+      "enabled": true,
+      "max_requests_per_minute": 60
+    }
+  },
+  "main": "index.ts",
+  "tags": ["security", "safety", "prompt-injection", "markdown"],
+  "enabled": true
+}
