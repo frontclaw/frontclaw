@@ -40,6 +40,17 @@ const initialState: ChatThreadState = {
   messages: [],
 };
 
+function updateLastAssistant(
+  state: ChatThreadState,
+  updater: (message: UIMessage) => UIMessage,
+): ChatThreadState {
+  const messages = [...state.messages];
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant") return state;
+  messages[messages.length - 1] = updater(last);
+  return { ...state, messages };
+}
+
 export function useChatStream() {
   const queryClient = useQueryClient();
 
@@ -164,6 +175,116 @@ export function useChatStream() {
                 tokenBuffer += evt.data.text;
                 break;
 
+              case "tool_start":
+                flushTokens();
+                queryClient.setQueryData<ChatThreadState>(
+                  key,
+                  (s = initialState) =>
+                    updateLastAssistant(s, (last) => {
+                      const toolName =
+                        typeof evt.data.toolName === "string"
+                          ? evt.data.toolName
+                          : "unknown-tool";
+                      const activeTools = new Set(last.activeTools || []);
+                      activeTools.add(toolName);
+                      return {
+                        ...last,
+                        toolEvents: [
+                          ...(last.toolEvents || []),
+                          {
+                            type: "start",
+                            toolName,
+                            args:
+                              evt.data.args &&
+                              typeof evt.data.args === "object"
+                                ? evt.data.args
+                                : undefined,
+                            startedAt:
+                              typeof evt.data.startedAt === "number"
+                                ? evt.data.startedAt
+                                : undefined,
+                          },
+                        ],
+                        activeTools: Array.from(activeTools),
+                      };
+                    }),
+                );
+                break;
+
+              case "tool_result":
+                flushTokens();
+                queryClient.setQueryData<ChatThreadState>(
+                  key,
+                  (s = initialState) =>
+                    updateLastAssistant(s, (last) => {
+                      const toolName =
+                        typeof evt.data.toolName === "string"
+                          ? evt.data.toolName
+                          : "unknown-tool";
+                      const activeTools = (last.activeTools || []).filter(
+                        (name) => name !== toolName,
+                      );
+                      return {
+                        ...last,
+                        toolEvents: [
+                          ...(last.toolEvents || []),
+                          {
+                            type: "result",
+                            toolName,
+                            source:
+                              evt.data.source === "skill" ? "skill" : "tool",
+                            durationMs:
+                              typeof evt.data.durationMs === "number"
+                                ? evt.data.durationMs
+                                : undefined,
+                            resultPreview:
+                              typeof evt.data.resultPreview === "string"
+                                ? evt.data.resultPreview
+                                : undefined,
+                          },
+                        ],
+                        activeTools,
+                      };
+                    }),
+                );
+                break;
+
+              case "tool_error":
+                flushTokens();
+                queryClient.setQueryData<ChatThreadState>(
+                  key,
+                  (s = initialState) =>
+                    updateLastAssistant(s, (last) => {
+                      const toolName =
+                        typeof evt.data.toolName === "string"
+                          ? evt.data.toolName
+                          : "unknown-tool";
+                      const activeTools = (last.activeTools || []).filter(
+                        (name) => name !== toolName,
+                      );
+                      return {
+                        ...last,
+                        toolEvents: [
+                          ...(last.toolEvents || []),
+                          {
+                            type: "error",
+                            toolName,
+                            durationMs:
+                              typeof evt.data.durationMs === "number"
+                                ? evt.data.durationMs
+                                : undefined,
+                            error:
+                              typeof evt.data.error === "string"
+                                ? evt.data.error
+                                : "Tool execution failed",
+                          },
+                        ],
+                        activeTools,
+                      };
+                    }),
+                );
+                break;
+
               case "done":
                 flushTokens();
                 queryClient.setQueryData<ChatThreadState>(
@@ -177,6 +298,7 @@ export function useChatStream() {
                         ...last,
                         id: evt.data.assistantMessageId,
                         pending: false,
+                        activeTools: [],
                       };
                     }
 
@@ -200,6 +322,7 @@ export function useChatStream() {
                           ...message,
                           pending: false,
                           error: true,
+                          activeTools: [],
                         };
                       }
                       return message;

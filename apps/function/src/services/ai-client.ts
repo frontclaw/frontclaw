@@ -1,12 +1,22 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
-import { createAIClient, getConfigPath, getConfigs } from "@workspace/core";
-import type { Chat, Embeddings, FrontClawSchema } from "@workspace/schema";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import {
+  createAIClient,
+  getConfigPath,
+  getConfigs,
+  type AIClientConfig,
+} from "@workspace/core";
+import type { Chat, FrontClawSchema } from "@workspace/schema";
+import { createOllama } from "ollama-ai-provider-v2";
 
 export type AIClientInstance = ReturnType<typeof createAIClient>;
 
-let aiClient = createAIClient({ debug: process.env.NODE_ENV === "development" });
+let aiClient = createAIClient({
+  debug: process.env.NODE_ENV === "development",
+});
+let configuredSystemPrompt = "";
 
 export const aiReady = (async () => {
   const configPath = getConfigPath();
@@ -17,7 +27,11 @@ export const aiReady = (async () => {
   }
   const configs = (await getConfigs(configPath)) as FrontClawSchema;
   const chatConfig = configs.ai_models?.chat;
-  const embeddingConfig = configs.ai_models?.embeddings;
+
+  configuredSystemPrompt =
+    typeof chatConfig?.system_prompt === "string"
+      ? chatConfig.system_prompt.trim()
+      : "";
 
   if (!chatConfig?.provider || !chatConfig.model || !chatConfig.api_key) {
     throw new Error(
@@ -26,13 +40,9 @@ export const aiReady = (async () => {
   }
 
   const model = createProviderModel(chatConfig);
-  const embeddingModel = embeddingConfig
-    ? createEmbeddingModel(embeddingConfig)
-    : undefined;
 
   aiClient = createAIClient({
     model,
-    embeddingModel,
     debug: process.env.NODE_ENV === "development",
   });
 })();
@@ -41,12 +51,17 @@ export function getAIClient(): AIClientInstance {
   return aiClient;
 }
 
-function createProviderModel(config: Chat) {
+export function getConfiguredSystemPrompt(): string {
+  return configuredSystemPrompt;
+}
+
+function createProviderModel(config: Chat): NonNullable<AIClientConfig["model"]> {
   switch (config.provider) {
     case "openai": {
       const openai = createOpenAI({
         apiKey: config.api_key,
         baseURL: config.base_url,
+        name: "openai",
       });
       return openai(config.model!);
     }
@@ -64,33 +79,24 @@ function createProviderModel(config: Chat) {
       });
       return google(config.model!);
     }
+    case "ollama": {
+      const ollama = createOllama({
+        name: "ollama",
+        baseURL: config.base_url,
+      });
+      return ollama(config.model!) as unknown as NonNullable<
+        AIClientConfig["model"]
+      >;
+    }
+    case "lmstudio": {
+      const lmstudio = createOpenAICompatible({
+        name: "lmstudio",
+        baseURL: config.base_url!,
+      });
+
+      return lmstudio(config.model!);
+    }
     default:
       throw new Error(`Unsupported chat provider: ${config.provider}`);
-  }
-}
-
-function createEmbeddingModel(config: Embeddings) {
-  if (!config.provider || !config.model || !config.api_key) {
-    throw new Error(
-      "frontclaw.json missing ai_models.embeddings.provider/model/api_key",
-    );
-  }
-  switch (config.provider) {
-    case "openai": {
-      const openai = createOpenAI({
-        apiKey: config.api_key,
-        baseURL: config.base_url,
-      });
-      return openai.embedding(config.model);
-    }
-    case "google": {
-      const google = createGoogleGenerativeAI({
-        apiKey: config.api_key,
-        baseURL: config.base_url,
-      });
-      return google.textEmbeddingModel(config.model);
-    }
-    default:
-      throw new Error(`Unsupported embedding provider: ${config.provider}`);
   }
 }

@@ -6,6 +6,7 @@ import {
 } from "@workspace/core";
 import { primaryActions as pDB } from "@workspace/db";
 import path from "node:path";
+import { createPluginSystemLogger, createScopedLogger } from "../lib/logging";
 
 function parseKey(value: string): Buffer {
   const trimmed = value.trim();
@@ -34,6 +35,9 @@ const secureMemoryService =
       })
     : memoryService;
 
+const appLogger = createScopedLogger("orchestrator");
+const pluginLogger = createPluginSystemLogger();
+
 const orchestratorConfig: OrchestratorConfig = {
   loader: {
     pluginsDir: path.resolve(import.meta.dirname, "../../../../plugins"),
@@ -46,7 +50,7 @@ const orchestratorConfig: OrchestratorConfig = {
     db: {
       async query(sql, params) {
         // TODO: Implement raw SQL query through Drizzle
-        console.log("DB Query:", sql, params);
+        appLogger.debug("DB query", { sql, params });
         return { rows: [], rowCount: 0 };
       },
       async getItems(table, options) {
@@ -64,12 +68,7 @@ const orchestratorConfig: OrchestratorConfig = {
         return null;
       },
     },
-    logger: {
-      debug: (msg, meta) => console.debug(`[DEBUG] ${msg}`, meta),
-      info: (msg, meta) => console.info(`[INFO] ${msg}`, meta),
-      warn: (msg, meta) => console.warn(`[WARN] ${msg}`, meta),
-      error: (msg, meta) => console.error(`[ERROR] ${msg}`, meta),
-    },
+    logger: pluginLogger,
   },
   memoryService: secureMemoryService,
   hookTimeout: 5000,
@@ -80,9 +79,11 @@ export const orchestrator = new Orchestrator(orchestratorConfig);
 export const orchestratorReady = orchestrator
   .start()
   .then(() => {
-    console.log("Frontclaw Orchestrator started successfully!");
+    appLogger.info("Frontclaw Orchestrator started successfully", undefined, {
+      essential: true,
+    });
   })
   .catch((error) => {
-    console.error("Failed to start Frontclaw Orchestrator:", error);
+    appLogger.error("Failed to start Frontclaw Orchestrator", error);
     throw error;
   });

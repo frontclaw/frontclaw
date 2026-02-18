@@ -53,6 +53,8 @@ export class Orchestrator {
   private sysCallHandler: ReturnType<typeof createSysCallHandler>;
   private isStarted = false;
   private memory: MemoryService;
+  private toolsCache: ToolDefinition[] | null = null;
+  private skillsCache: SkillDefinition[] | null = null;
 
   constructor(private readonly config: OrchestratorConfig) {
     this.loader = new PluginLoader(config.loader);
@@ -65,6 +67,15 @@ export class Orchestrator {
       manifests: this.manifests,
       bridges: this.bridges,
     };
+  }
+
+  /**
+   * Preload plugin-exposed capabilities so the first request does not pay discovery cost.
+   */
+  private async warmCapabilities(): Promise<void> {
+    const runtime = this.getRuntimeContext();
+    this.toolsCache = await collectToolsPipeline(runtime);
+    this.skillsCache = await collectSkillsPipeline(runtime);
   }
 
   /**
@@ -95,6 +106,8 @@ export class Orchestrator {
       }
     }
 
+    await this.warmCapabilities();
+
     this.isStarted = true;
     console.log(
       `Orchestrator started with ${this.bridges.size} active plugins`,
@@ -118,6 +131,8 @@ export class Orchestrator {
 
     this.bridges.clear();
     this.manifests = [];
+    this.toolsCache = null;
+    this.skillsCache = null;
     this.isStarted = false;
     console.log("Orchestrator stopped");
   }
@@ -141,18 +156,29 @@ export class Orchestrator {
   }
 
   async collectTools(): Promise<ToolDefinition[]> {
-    return collectToolsPipeline(this.getRuntimeContext());
+    if (this.toolsCache) return [...this.toolsCache];
+    this.toolsCache = await collectToolsPipeline(this.getRuntimeContext());
+    return [...this.toolsCache];
   }
 
   async executeTool(
     toolName: string,
     args: Record<string, unknown>,
+    options: { source: "llm" | "system" },
   ): Promise<ToolResult> {
+    if (options.source !== "llm") {
+      return {
+        success: false,
+        error: "Tool execution denied: tools must be triggered by the LLM",
+      };
+    }
     return executeToolPipeline(this.getRuntimeContext(), toolName, args);
   }
 
   async collectSkills(): Promise<SkillDefinition[]> {
-    return collectSkillsPipeline(this.getRuntimeContext());
+    if (this.skillsCache) return [...this.skillsCache];
+    this.skillsCache = await collectSkillsPipeline(this.getRuntimeContext());
+    return [...this.skillsCache];
   }
 
   async executeSkill(

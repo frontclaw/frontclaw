@@ -65,6 +65,22 @@ export type ChatStreamDone = {
 export type ChatStreamHandlers = {
   onMeta?: (payload: ChatStreamMeta) => void;
   onDelta?: (payload: { text?: string }) => void;
+  onToolStart?: (payload: {
+    toolName?: string;
+    args?: Record<string, unknown>;
+    startedAt?: number;
+  }) => void;
+  onToolResult?: (payload: {
+    toolName?: string;
+    source?: "tool" | "skill";
+    durationMs?: number;
+    resultPreview?: string;
+  }) => void;
+  onToolError?: (payload: {
+    toolName?: string;
+    durationMs?: number;
+    error?: string;
+  }) => void;
   onDone?: (payload: ChatStreamDone) => void;
   onError?: (payload: { message?: string; error?: string }) => void;
 };
@@ -234,6 +250,30 @@ export async function streamChat(
 
     if (eventName === "meta") handlers.onMeta?.(parsed as ChatStreamMeta);
     if (eventName === "delta") handlers.onDelta?.(parsed as { text?: string });
+    if (eventName === "tool_start") {
+      handlers.onToolStart?.(
+        parsed as {
+          toolName?: string;
+          args?: Record<string, unknown>;
+          startedAt?: number;
+        },
+      );
+    }
+    if (eventName === "tool_result") {
+      handlers.onToolResult?.(
+        parsed as {
+          toolName?: string;
+          source?: "tool" | "skill";
+          durationMs?: number;
+          resultPreview?: string;
+        },
+      );
+    }
+    if (eventName === "tool_error") {
+      handlers.onToolError?.(
+        parsed as { toolName?: string; durationMs?: number; error?: string },
+      );
+    }
     if (eventName === "done") handlers.onDone?.(parsed as ChatStreamDone);
     if (eventName === "error") {
       handlers.onError?.(parsed as { message?: string; error?: string });

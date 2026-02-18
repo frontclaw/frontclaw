@@ -10,6 +10,114 @@ import type {
   SysCallOrchestrator,
 } from "./types.js";
 
+const SYSCALL_WINDOW_MS = 60_000;
+const MAX_SYSCALLS_PER_WINDOW = 300;
+
+type PluginQuotaState = {
+  count: number;
+  resetAt: number;
+};
+
+const pluginQuotaState = new Map<string, PluginQuotaState>();
+
+class SysCallRateLimitError extends Error {
+  code = "SYSCALL_RATE_LIMITED";
+  constructor(pluginId: string, limit: number) {
+    super(
+      `Plugin '${pluginId}' exceeded the system call limit (${limit}/minute)`,
+    );
+    this.name = "SysCallRateLimitError";
+  }
+}
+
+function enforceSysCallRateLimit(pluginId: string): void {
+  const now = Date.now();
+  const currentState = pluginQuotaState.get(pluginId);
+
+  if (!currentState || now >= currentState.resetAt) {
+    pluginQuotaState.set(pluginId, {
+      count: 1,
+      resetAt: now + SYSCALL_WINDOW_MS,
+    });
+    return;
+  }
+
+  if (currentState.count >= MAX_SYSCALLS_PER_WINDOW) {
+    throw new SysCallRateLimitError(pluginId, MAX_SYSCALLS_PER_WINDOW);
+  }
+
+  currentState.count += 1;
+}
+
+function stripQuotedSegments(sql: string): string {
+  return sql.replace(/'(?:''|[^'])*'/g, " ");
+}
+
+function normalizeSqlForAnalysis(sql: string): string {
+  return stripQuotedSegments(sql)
+    .replace(/--.*$/gm, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTableName(raw: string): string | null {
+  const normalized = raw
+    .replace(/["'`]/g, "")
+    .split(".")
+    .at(-1)
+    ?.trim();
+
+  if (!normalized) return null;
+  if (!/^[a-zA-Z_][\w$]*$/.test(normalized)) return null;
+  return normalized;
+}
+
+function extractTables(sql: string): string[] {
+  const normalizedSql = normalizeSqlForAnalysis(sql);
+  const tables = new Set<string>();
+  const patterns = [
+    /\bFROM\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
+    /\bJOIN\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
+    /\bINTO\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
+    /\bUPDATE\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
+    /\bDELETE\s+FROM\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(normalizedSql)) !== null) {
+      const table = extractTableName(match[1] ?? "");
+      if (table) tables.add(table);
+    }
+  }
+
+  return Array.from(tables);
+}
+
+function isWriteQuery(sql: string): boolean {
+  const normalizedSql = normalizeSqlForAnalysis(sql);
+  return /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE)\b/i.test(
+    normalizedSql,
+  );
+}
+
+function validateSingleStatement(sql: string, pluginId: string): void {
+  const normalizedSql = normalizeSqlForAnalysis(sql);
+  const statements = normalizedSql
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+
+  if (statements.length > 1) {
+    throw new PermissionDeniedError(
+      pluginId,
+      "db.query",
+      "execute multiple SQL statements",
+    );
+  }
+}
+
 /**
  * Create a system call handler with dependencies
  */
@@ -22,16 +130,26 @@ export function createSysCallHandler(
     payload: unknown,
     manifest: LoadedPluginManifest,
   ): Promise<unknown> {
+    enforceSysCallRateLimit(manifest.id);
+
     const guard = new PermissionGuard(manifest);
     const data = payload as Record<string, unknown>;
 
     if (method === "db.query") {
       const { sql, params } = data as { sql: string; params?: unknown[] };
-      const tableMatch = sql.match(/(?:FROM|INTO|UPDATE)\s+["']?(\w+)["']?/i);
-      const table = tableMatch?.[1] || "*";
-      const isWrite = /^(INSERT|UPDATE|DELETE)/i.test(sql.trim());
+      validateSingleStatement(sql, manifest.id);
+      const tables = extractTables(sql);
+      const writeQuery = isWriteQuery(sql);
 
-      guard.checkDBAccess(table, isWrite);
+      if (tables.length === 0) {
+        // Fail closed unless plugin has wildcard table access.
+        guard.checkDBAccess("*", writeQuery);
+      } else {
+        for (const table of tables) {
+          guard.checkDBAccess(table, writeQuery);
+        }
+      }
+
       return deps.db.query(sql, params);
     }
 

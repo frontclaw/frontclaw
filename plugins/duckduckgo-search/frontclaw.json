@@ -1,0 +1,24 @@
+{
+  "id": "duckduckgo-search",
+  "name": "DuckDuckGo Search",
+  "version": "1.0.0",
+  "description": "Exposes tool + skill for web search through DuckDuckGo Instant Answer API",
+  "author": {
+    "name": "Frontclaw Team"
+  },
+  "priority": 40,
+  "permissions": {
+    "network": {
+      "allowed_domains": ["api.duckduckgo.com"],
+      "allow_all": false
+    },
+    "skills": ["web_search"],
+    "log": {
+      "enabled": true,
+      "levels": ["debug", "info", "warn", "error"]
+    }
+  },
+  "main": "index.ts",
+  "tags": ["search", "duckduckgo", "tool", "skill"],
+  "enabled": true
+}

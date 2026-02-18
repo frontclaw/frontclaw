@@ -314,13 +314,12 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
             <ArrowDown size={18} />
           </button>
         ) : null}
+
         <ChatComposer
-          value={composerValue}
-          onChange={setComposerValue}
-          onSend={async () => {
-            const message = composerValue.trim();
+          defaultValue={composerValue}
+          onSend={async (prompt) => {
+            const message = prompt.trim();
             if (!message) return;
-            setComposerValue("");
             await sendMessage(message);
           }}
           sending={mutatePrompt.isPending}

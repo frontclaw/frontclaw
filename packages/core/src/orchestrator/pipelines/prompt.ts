@@ -122,6 +122,8 @@ export async function afterLLMCallPipeline(
     const bridge = runtime.bridges.get(manifest.id);
     if (!bridge) continue;
 
+    if (!manifest.permissions.llm?.can_modify_response) continue;
+
     try {
       const result = await bridge.callHook("afterLLMCall", currentResponse);
       if (typeof result === "string") {

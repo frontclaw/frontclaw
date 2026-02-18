@@ -31,6 +31,16 @@ const DEFAULT_CONFIG: BridgeConfig = {
   sysCallTimeout: 30000,
 };
 
+function sanitizeStackForPlugin(stack?: string): string | undefined {
+  if (!stack) return undefined;
+  if (process.env.NODE_ENV === "production") return undefined;
+  return stack
+    .split("\n")
+    .slice(0, 8)
+    .map((line) => line.replaceAll(process.cwd(), "<redacted>"))
+    .join("\n");
+}
+
 /** System call handler function */
 export type SysCallHandler = (
   method: string,
@@ -129,6 +139,7 @@ export class PluginWorkerBridge {
       id: crypto.randomUUID(),
       type: "INIT",
       entryPath: this.manifest.entryPath,
+      pluginPath: this.manifest.pluginPath,
       config: this.manifest.config,
       permissions: this.manifest.permissions,
       pluginId: this.manifest.id,
@@ -242,7 +253,7 @@ export class PluginWorkerBridge {
           request.id,
           (err as any).code || "SYS_CALL_ERROR",
           err.message,
-          err.stack,
+          sanitizeStackForPlugin(err.stack),
         ),
       );
     }

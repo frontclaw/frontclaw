@@ -9,7 +9,6 @@ export function messageFromStored(entry: Message): UIMessage | null {
     id: entry.id,
     role: entry.role,
     content: entry.content,
-    createdAt: entry.createdAt || new Date().toISOString(),
   };
 }
 

@@ -67,17 +67,43 @@ function getConfig(ctx: PluginContext): SecurityConfig {
   return parsed.data;
 }
 
-/** Rate limiting state */
-const rateLimitState = new Map<string, { count: number; resetAt: number }>();
-
-/** Security statistics */
-const stats = {
-  totalPrompts: 0,
-  blockedPrompts: 0,
-  sanitizedPrompts: 0,
-  injectionAttempts: 0,
-  markdownViolations: 0,
+type PluginStats = {
+  totalPrompts: number;
+  blockedPrompts: number;
+  sanitizedPrompts: number;
+  injectionAttempts: number;
+  markdownViolations: number;
 };
+
+type PluginState = {
+  rateLimitState: Map<string, { count: number; resetAt: number }>;
+  stats: PluginStats;
+};
+
+const pluginStates = new Map<string, PluginState>();
+
+function createInitialStats(): PluginStats {
+  return {
+    totalPrompts: 0,
+    blockedPrompts: 0,
+    sanitizedPrompts: 0,
+    injectionAttempts: 0,
+    markdownViolations: 0,
+  };
+}
+
+function getPluginState(pluginId: string): PluginState {
+  const existing = pluginStates.get(pluginId);
+  if (existing) return existing;
+
+  const state: PluginState = {
+    rateLimitState: new Map<string, { count: number; resetAt: number }>(),
+    stats: createInitialStats(),
+  };
+
+  pluginStates.set(pluginId, state);
+  return state;
+}
 
 /**
  * Check for prompt injection patterns
@@ -181,6 +207,7 @@ function sanitizeMarkdown(
 function checkRateLimit(
   clientId: string,
   config: SecurityConfig["rate_limit"],
+  rateLimitState: Map<string, { count: number; resetAt: number }>,
 ): boolean {
   if (!config.enabled) return true;
 
@@ -209,9 +236,14 @@ export default definePlugin({
    */
   async onLoad(ctx: PluginContext) {
     const config = getConfig(ctx);
+    getPluginState(ctx.pluginId);
     ctx.log.info("Security Guardian initialized", {
       patterns: config.forbidden_patterns.length,
     });
+  },
+
+  async onUnload(ctx: PluginContext) {
+    pluginStates.delete(ctx.pluginId);
   },
 
   /**
@@ -219,11 +251,12 @@ export default definePlugin({
    */
   async onPromptReceived(ctx: PluginContext, prompt: string) {
     const config = getConfig(ctx);
-    stats.totalPrompts++;
+    const state = getPluginState(ctx.pluginId);
+    state.stats.totalPrompts++;
 
     // Rate limiting (using a simple session ID for demo)
-    if (!checkRateLimit("default-session", config.rate_limit)) {
-      stats.blockedPrompts++;
+    if (!checkRateLimit("default-session", config.rate_limit, state.rateLimitState)) {
+      state.stats.blockedPrompts++;
       throw ctx.error(
         "RATE_LIMITED",
         "Too many requests. Please wait before trying again.",
@@ -232,8 +265,8 @@ export default definePlugin({
 
     // 1. Check for prompt injection
     if (detectInjection(prompt, config.forbidden_patterns)) {
-      stats.blockedPrompts++;
-      stats.injectionAttempts++;
+      state.stats.blockedPrompts++;
+      state.stats.injectionAttempts++;
       ctx.log.warn("Potential prompt injection detected", {
         prompt: prompt.substring(0, 100),
       });
@@ -250,8 +283,8 @@ export default definePlugin({
     );
 
     if (violations.length > 0) {
-      stats.sanitizedPrompts++;
-      stats.markdownViolations += violations.length;
+      state.stats.sanitizedPrompts++;
+      state.stats.markdownViolations += violations.length;
       ctx.log.info("Prompt sanitized", { violations });
     }
 
@@ -283,6 +316,8 @@ SECURITY DIRECTIVES (HIGHEST PRIORITY):
     ctx: PluginContext,
     request: HTTPRequestContext,
   ): Promise<HTTPResponse> {
+    const state = getPluginState(ctx.pluginId);
+
     if (request.path === "/security/stats" && request.method === "GET") {
       return {
         status: 200,
@@ -290,10 +325,10 @@ SECURITY DIRECTIVES (HIGHEST PRIORITY):
         body: {
           success: true,
           stats: {
-            ...stats,
+            ...state.stats,
             blockRate:
-              stats.totalPrompts > 0
-                ? ((stats.blockedPrompts / stats.totalPrompts) * 100).toFixed(
+              state.stats.totalPrompts > 0
+                ? ((state.stats.blockedPrompts / state.stats.totalPrompts) * 100).toFixed(
                     2,
                   ) + "%"
                 : "0%",

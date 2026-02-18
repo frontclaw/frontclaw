@@ -3,22 +3,21 @@
  * This file runs inside the Bun.Worker and provides the sandboxed context
  */
 
+import path from "node:path";
 import type {
-  RPCMessage,
-  RPCHookRequest,
-  RPCResponse,
-  RPCSysCallRequest,
-  PluginContext,
   FrontclawPlugin,
   Permissions,
+  PluginContext,
   PluginError,
   PluginInterceptResult,
+  RPCHookRequest,
+  RPCMessage,
   SandboxedDB,
   SandboxedLogger,
 } from "../types/index.js";
 import {
-  createSuccessResponse,
   createErrorResponse,
+  createSuccessResponse,
   createSysCallRequest,
 } from "../types/rpc.js";
 
@@ -169,7 +168,10 @@ function createSandboxedMemory() {
     async delete(key: string): Promise<void> {
       await dispatchSysCall("memory.delete", { key: normalizeKey(key) });
     },
-    async list(prefix?: string, options?: { limit?: number }): Promise<string[]> {
+    async list(
+      prefix?: string,
+      options?: { limit?: number },
+    ): Promise<string[]> {
       return dispatchSysCall("memory.list", {
         prefix: normalizePrefix(prefix),
         options,
@@ -267,6 +269,7 @@ async function handleInit(msg: {
   id: string;
   type: "INIT";
   entryPath: string;
+  pluginPath: string;
   config: Record<string, unknown>;
   permissions: Permissions;
   pluginId: string;
@@ -276,8 +279,23 @@ async function handleInit(msg: {
     pluginPermissions = msg.permissions;
     pluginId = msg.pluginId;
 
+    const resolvedPluginPath = path.resolve(msg.pluginPath);
+    const resolvedEntryPath = path.resolve(msg.entryPath);
+    const relativeEntryPath = path.relative(
+      resolvedPluginPath,
+      resolvedEntryPath,
+    );
+    const isEntryPathInsidePlugin =
+      relativeEntryPath === "" ||
+      (!relativeEntryPath.startsWith("..") &&
+        !path.isAbsolute(relativeEntryPath));
+
+    if (!isEntryPathInsidePlugin) {
+      throw new Error("Plugin entry path must stay within plugin directory");
+    }
+
     // Dynamically import the plugin
-    const module = await import(msg.entryPath);
+    const module = await import(resolvedEntryPath);
     plugin = module.default || module;
 
     // Call onLoad if present

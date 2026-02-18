@@ -106,7 +106,10 @@ export type Features = z.infer<typeof FeaturesSchema>;
 export const FrontClawSchemaSchema = z
   .object({
     version: z.string().optional().default("1.0.0"),
-    project: ProjectSchema.optional().default({}),
+    project: ProjectSchema.optional().default({
+      name: "FrontClaw Project",
+      environment: "development",
+    }),
     database: DatabaseSchema.optional().default({}),
     ai_models: AiModelsSchema.optional().default({}),
     features: FeaturesSchema.optional().default({}),

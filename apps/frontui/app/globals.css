@@ -179,7 +179,7 @@ body {
 .frontui-md-code-inline {
   display: inline-block;
   border-radius: 6px;
-  border: 1px solid rgba(116, 123, 133, 0.28);
+  /* border: 1px solid rgba(116, 123, 133, 0.28); */
   background: rgba(227, 235, 237, 0.7);
   padding: 0.05rem 0.4rem;
   font-size: 0.86em;
@@ -203,11 +203,21 @@ body {
 .frontui-md-ol {
   margin: 0.45rem 0 0.35rem;
   padding-left: 1.2rem;
+  list-style-position: outside; 
 }
 
 .frontui-md-li {
   margin: 0.2rem 0;
 }
+
+.frontui-md-ul {
+  list-style: disc;
+}
+
+.frontui-md-ol {
+  list-style: decimal;
+}
+
 
 .frontui-md-blockquote {
   margin: 0.55rem 0;

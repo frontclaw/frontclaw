@@ -24,6 +24,7 @@ export const LLMPermissionSchema = z.object({
   can_intercept_task: z.boolean().optional().default(false),
   can_modify_prompt: z.boolean().optional().default(false),
   can_modify_system_message: z.boolean().optional().default(false),
+  can_modify_response: z.boolean().optional().default(false),
   max_tokens_per_request: z.number().optional(),
 });
 export type LLMPermission = z.infer<typeof LLMPermissionSchema>;

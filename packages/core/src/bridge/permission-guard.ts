@@ -156,6 +156,19 @@ export class PermissionGuard {
   }
 
   /**
+   * Check if plugin can modify LLM responses
+   */
+  checkResponseModification(): void {
+    if (!this.manifest.permissions.llm?.can_modify_response) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "llm.can_modify_response",
+        "modify LLM response",
+      );
+    }
+  }
+
+  /**
    * Check if plugin can intercept socket events
    */
   checkSocketIntercept(event: string): void {

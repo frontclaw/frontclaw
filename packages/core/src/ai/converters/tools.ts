@@ -1,4 +1,4 @@
-import { tool, type CoreTool } from "ai";
+import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import type { ToolDefinition } from "../types.js";
 
@@ -8,13 +8,19 @@ import type { ToolDefinition } from "../types.js";
 export function convertTools(
   tools: ToolDefinition[],
   executor?: (toolName: string, args: Record<string, unknown>) => Promise<unknown>,
-): Record<string, CoreTool> {
-  const result: Record<string, CoreTool> = {};
+): ToolSet {
+  const result: ToolSet = {};
+  type ToolParam = {
+    type: string;
+    description?: string;
+    enum?: string[];
+  };
 
   for (const toolDef of tools) {
     const properties: Record<string, z.ZodTypeAny> = {};
+    const toolParams = toolDef.parameters.properties as Record<string, ToolParam>;
 
-    for (const [key, param] of Object.entries(toolDef.parameters.properties)) {
+    for (const [key, param] of Object.entries(toolParams)) {
       let schema: z.ZodTypeAny;
 
       switch (param.type) {
@@ -33,7 +39,7 @@ export function convertTools(
           schema = z.array(z.unknown());
           break;
         case "object":
-          schema = z.record(z.unknown());
+          schema = z.record(z.string(), z.unknown());
           break;
         default:
           schema = z.unknown();
@@ -52,7 +58,7 @@ export function convertTools(
 
     const definition = {
       description: toolDef.description,
-      parameters: z.object(properties),
+      inputSchema: z.object(properties),
     };
 
     result[toolDef.name] = executor

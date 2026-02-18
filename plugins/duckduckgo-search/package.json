@@ -1,0 +1,15 @@
+{
+  "name": "@frontclaw/plugin-duckduckgo-search",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@mendable/firecrawl-js": "^4.13.0",
+    "@pikisoft/duckduckgo-search": "^0.0.4",
+    "@workspace/plugin-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.8",
+    "typescript": "^5.9.3"
+  }
+}

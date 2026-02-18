@@ -4,13 +4,10 @@
  */
 
 import {
+  generateObject,
   generateText,
   streamText,
-  generateObject,
-  embed,
-  embedMany,
   type LanguageModel,
-  type EmbeddingModel,
 } from "ai";
 import { z } from "zod";
 import { convertMessages } from "./converters/messages.js";
@@ -19,10 +16,8 @@ import type {
   ChatCompletionOptions,
   ChatCompletionResult,
   StreamChunk,
-  ToolCall,
-  EmbeddingOptions,
-  EmbeddingResult,
   StructuredOutputOptions,
+  ToolCall,
 } from "./types.js";
 
 /**
@@ -32,7 +27,6 @@ export interface AIClientConfig {
   /** Language model instance (from AI SDK provider) */
   model?: LanguageModel;
   /** Embedding model instance (from AI SDK provider) */
-  embeddingModel?: EmbeddingModel<string>;
   /** Enable debug logging */
   debug?: boolean;
 }
@@ -58,6 +52,18 @@ export class AIClient {
       );
     }
     return this.config.model;
+  }
+
+  private mapUsage(usage: {
+    inputTokens: number | undefined;
+    outputTokens: number | undefined;
+    totalTokens: number | undefined;
+  }): ChatCompletionResult["usage"] {
+    return {
+      promptTokens: usage.inputTokens ?? 0,
+      completionTokens: usage.outputTokens ?? 0,
+      totalTokens: usage.totalTokens ?? 0,
+    };
   }
 
   /**
@@ -95,7 +101,7 @@ export class AIClient {
         typeof generateText
       >[0]["toolChoice"],
       temperature: options.temperature,
-      maxTokens: options.maxTokens,
+      maxOutputTokens: options.maxTokens,
       stopSequences: options.stopSequences,
     });
 
@@ -104,18 +110,14 @@ export class AIClient {
       result.toolCalls?.map((tc) => ({
         id: tc.toolCallId,
         name: tc.toolName,
-        arguments: tc.args as Record<string, unknown>,
+        arguments: (tc.input as Record<string, unknown>) ?? {},
       })) || [];
 
     return {
       content: result.text,
       toolCalls,
       finishReason: result.finishReason as ChatCompletionResult["finishReason"],
-      usage: {
-        promptTokens: result.usage.promptTokens,
-        completionTokens: result.usage.completionTokens,
-        totalTokens: result.usage.totalTokens,
-      },
+      usage: this.mapUsage(result.usage),
     };
   }
 
@@ -149,7 +151,7 @@ export class AIClient {
         typeof streamText
       >[0]["toolChoice"],
       temperature: options.temperature,
-      maxTokens: options.maxTokens,
+      maxOutputTokens: options.maxTokens,
       stopSequences: options.stopSequences,
     });
 
@@ -166,6 +168,7 @@ export class AIClient {
     }
 
     // Get final values
+    const finalText = await streamResult.text;
     const finishReason = await streamResult.finishReason;
     const usage = await streamResult.usage;
     const finalToolCalls = await streamResult.toolCalls;
@@ -176,7 +179,7 @@ export class AIClient {
         toolCalls.push({
           id: tc.toolCallId,
           name: tc.toolName,
-          arguments: tc.args as Record<string, unknown>,
+          arguments: (tc.input as Record<string, unknown>) ?? {},
         });
       }
     }
@@ -187,14 +190,10 @@ export class AIClient {
     };
 
     return {
-      content: fullText,
+      content: finalText || fullText,
       toolCalls,
       finishReason: finishReason as ChatCompletionResult["finishReason"],
-      usage: {
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
-        totalTokens: usage.totalTokens,
-      },
+      usage: this.mapUsage(usage),
     };
   }
 
@@ -230,53 +229,9 @@ export class AIClient {
     });
 
     return {
-      data: result.object,
-      usage: {
-        promptTokens: result.usage.promptTokens,
-        completionTokens: result.usage.completionTokens,
-        totalTokens: result.usage.totalTokens,
-      },
+      data: result.object as z.infer<T>,
+      usage: this.mapUsage(result.usage),
     };
-  }
-
-  /**
-   * Generate embeddings for text
-   */
-  async embed(options: EmbeddingOptions): Promise<EmbeddingResult> {
-    if (!this.config.embeddingModel) {
-      throw new Error(
-        "AIClient requires an embedding model instance. Provide config.embeddingModel from an AI SDK provider.",
-      );
-    }
-    const embeddingModel = this.config.embeddingModel;
-
-    if (Array.isArray(options.text)) {
-      const result = await embedMany({
-        model: embeddingModel,
-        values: options.text,
-      });
-
-      return {
-        embeddings: result.embeddings,
-        usage: {
-          promptTokens: result.usage.tokens,
-          totalTokens: result.usage.tokens,
-        },
-      };
-    } else {
-      const result = await embed({
-        model: embeddingModel,
-        value: options.text,
-      });
-
-      return {
-        embeddings: [result.embedding],
-        usage: {
-          promptTokens: result.usage.tokens,
-          totalTokens: result.usage.tokens,
-        },
-      };
-    }
   }
 
   /**

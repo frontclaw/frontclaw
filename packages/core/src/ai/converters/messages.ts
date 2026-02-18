@@ -1,10 +1,10 @@
-import type { CoreMessage } from "ai";
+import type { ModelMessage } from "ai";
 import type { ChatMessage } from "../types.js";
 
 /**
  * Convert core chat messages to AI SDK format
  */
-export function convertMessages(messages: ChatMessage[]): CoreMessage[] {
+export function convertMessages(messages: ChatMessage[]): ModelMessage[] {
   return messages.map((msg) => {
     if (msg.role === "tool" && msg.toolCallId) {
       return {
@@ -14,7 +14,7 @@ export function convertMessages(messages: ChatMessage[]): CoreMessage[] {
             type: "tool-result" as const,
             toolCallId: msg.toolCallId,
             toolName: msg.toolName || "unknown",
-            result: msg.content,
+            output: { type: "text" as const, value: msg.content },
           },
         ],
       };

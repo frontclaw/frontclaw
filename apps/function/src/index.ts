@@ -1,7 +1,11 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { registerRoutes } from "./routes";
-import { aiReady, getAIClient } from "./services/ai-client";
+import {
+  aiReady,
+  getAIClient,
+  getConfiguredSystemPrompt,
+} from "./services/ai-client";
 import { orchestrator, orchestratorReady } from "./services/orchestrator";
 
 const app = new Hono();
@@ -12,6 +16,7 @@ registerRoutes(app, {
   orchestratorReady,
   aiReady,
   getAIClient,
+  getConfiguredSystemPrompt,
 });
 
 aiReady
@@ -34,7 +39,4 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-export default {
-  ...app,
-  port: 9901,
-};
+Bun.serve({ fetch: app.fetch, idleTimeout: 50, port: 9901 });

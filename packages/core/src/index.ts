@@ -16,15 +16,15 @@ export {
 
 // Bridge
 export {
-  PluginWorkerBridge,
-  PermissionGuard,
-  PermissionDeniedError,
   createSysCallHandler,
+  PermissionDeniedError,
+  PermissionGuard,
+  PluginWorkerBridge,
   type BridgeConfig,
-  type SysCallHandler,
-  type SystemLogger,
   type DBAdapter,
   type SysCallDependencies,
+  type SysCallHandler,
+  type SystemLogger,
 } from "./bridge/index.js";
 
 // Loader
@@ -40,16 +40,16 @@ export {
   createAIClient,
   defaultAIClient,
   type AIClientConfig,
-  type ChatMessage,
   type ChatCompletionOptions,
   type ChatCompletionResult,
-  type StreamChunk,
-  type ToolDefinition,
-  type ToolCall,
-  type ToolResult,
+  type ChatMessage,
   type EmbeddingOptions,
   type EmbeddingResult,
+  type StreamChunk,
   type StructuredOutputOptions,
+  type ToolCall,
+  type ToolDefinition,
+  type ToolResult,
 } from "./ai/index.js";
 
 // Memory

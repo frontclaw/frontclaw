@@ -2,31 +2,32 @@
 
 import { cn } from "@workspace/ui/lib/utils";
 import { Loader2, SendHorizontal } from "lucide-react";
+import { useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
 
 type ChatComposerProps = {
-  value: string;
-  onChange: (value: string) => void;
-  onSend: () => void;
+  defaultValue: string;
+  onSend: (val: string) => void;
   sending: boolean;
   errorText: string | null;
   placeholder?: string;
 };
 
 export function ChatComposer({
-  value,
-  onChange,
+  defaultValue,
   onSend,
   sending,
   errorText,
   placeholder = "Ask anything, tell what to do...",
 }: ChatComposerProps) {
+  const [composerValue, setComposerValue] = useState("");
+
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (
     event,
   ) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      onSend();
+      onSend(composerValue);
     }
   };
 
@@ -46,8 +47,9 @@ export function ChatComposer({
         >
           <div className="flex items-end gap-2">
             <TextareaAutosize
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
+              defaultValue={defaultValue}
+              value={composerValue}
+              onChange={(e) => setComposerValue(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder={placeholder}
               minRows={1}
@@ -62,8 +64,8 @@ export function ChatComposer({
 
             <button
               type="button"
-              disabled={sending || value.trim().length === 0}
-              onClick={onSend}
+              disabled={sending || composerValue.trim().length === 0}
+              onClick={() => onSend(composerValue)}
               aria-label="Send message"
               className="
         inline-flex h-9 w-9 shrink-0 items-center justify-center

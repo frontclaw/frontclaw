@@ -9,4 +9,5 @@ export type RouteDeps = {
 export type AIRouteDeps = RouteDeps & {
   aiReady: Promise<void>;
   getAIClient: () => AIClientInstance;
+  getConfiguredSystemPrompt: () => string;
 };

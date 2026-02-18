@@ -110,6 +110,7 @@ export function ConversationSidebar() {
           }`,
           !sidebarAtom.open && "w-14",
           "overflow-y-auto",
+          "bg-amber-50/20 backdrop-blur-2xl"
         )}
       >
         <div className="sticky top-0 left-0 w-full pt-3 px-3 bg-amber-50/5 z-50 border-0 shadow-none backdrop-blur-3xl">
@@ -153,7 +154,7 @@ export function ConversationSidebar() {
             ) : (
               <Button
                 type="button"
-                size={'icon'}
+                size={"icon"}
                 onClick={() => {
                   router.push("/");
                 }}
@@ -167,161 +168,167 @@ export function ConversationSidebar() {
 
         {sidebarAtom.open ? (
           <div className="space-y-2 overflow-y-auto px-3 pt-6">
-            {loading ? (
-              <div className="flex items-center gap-2 rounded-xl border border-[var(--frontui-line)] bg-[var(--frontui-surface)] p-3 text-sm text-[var(--frontui-muted)]">
-                <Loader2 className="animate-spin" size={16} /> Loading
-                conversations...
-              </div>
-            ) : conversations?.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-[var(--frontui-line)] bg-[var(--frontui-surface)] p-4 text-sm text-[var(--frontui-muted)]">
-                No conversations yet. Start your first message.
-              </div>
-            ) : (
-              (() => {
-                const grouped = groupConversations(conversations ?? []);
-                const order: Array<"recent" | "yesterday" | "past"> = [
-                  "recent",
-                  "yesterday",
-                  "past",
-                ];
-                return (
-                  <>
-                    {order.map((groupKey) => {
-                      const items = grouped.get(groupKey) || [];
-                      if (items.length === 0) return null;
-                      return (
-                        <div key={groupKey} className="mb-4">
-                          <h3 className="mb-2 ml-3 text-xs font-semibold uppercase tracking-[0.19em] text-[var(--frontui-muted)]">
-                            {groupKey === "recent"
-                              ? "Recent"
-                              : groupKey === "yesterday"
-                                ? "Yesterday"
-                                : "Past"}
-                          </h3>
-                          <div className="min-h-[80vh]">
-                            {items.map((conversation) => {
-                              const active =
-                                conversation.id === activeConversationId;
-                              const isEditing = editingId === conversation.id;
+            <div className="min-h-[80vh]">
+              {loading ? (
+                <div className="flex items-center gap-2 rounded-xl border border-[var(--frontui-line)] bg-[var(--frontui-surface)] p-3 text-sm text-[var(--frontui-muted)]">
+                  <Loader2 className="animate-spin" size={16} /> Loading
+                  conversations...
+                </div>
+              ) : conversations?.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-[var(--frontui-line)] bg-[var(--frontui-surface)] p-4 text-sm text-[var(--frontui-muted)]">
+                  No conversations yet. Start your first message.
+                </div>
+              ) : (
+                (() => {
+                  const grouped = groupConversations(conversations ?? []);
+                  const order: Array<"recent" | "yesterday" | "past"> = [
+                    "recent",
+                    "yesterday",
+                    "past",
+                  ];
 
-                              return (
-                                <div
-                                  key={conversation.id}
-                                  className={cn(
-                                    `group flex items-center relative message-enter w-full rounded-lg border border-transparent h-9 py-1 text-left transition`,
-                                    active
-                                      ? "border-[var(--frontui-accent)]/20 bg-[var(--frontui-accent-soft)]/20"
-                                      : "hover:bg-[var(--frontui-surface-2)]",
-                                  )}
-                                >
-                                  <Link
-                                    href={`/c/${conversation.id}`}
-                                    className={`w-full px-2 pl-3`}
-                                  >
-                                    {isEditing ? (
-                                      <div className="relative">
-                                        <input
-                                          ref={inputRef}
-                                          type="text"
-                                          value={editValue}
-                                          onChange={(e) =>
-                                            setEditValue(e.target.value)
-                                          }
-                                          onBlur={() =>
-                                            handleBlur(conversation.id)
-                                          }
-                                          onKeyDown={(e) =>
-                                            handleKeyDown(e, conversation.id)
-                                          }
-                                          className="w-full rounded border border-[var(--frontui-line)] bg-[var(--frontui-surface)] px-2 py-1 text-sm text-[var(--frontui-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--frontui-accent)]"
-                                        />
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setEditingId(null);
-                                            setEditValue("");
-                                          }}
-                                          className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-[var(--frontui-muted)] hover:text-[var(--frontui-ink)]"
-                                        >
-                                          <X size={14} />
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div className="flex items-center justify-between gap-2">
-                                        <p className="line-clamp-1 text-sm text-[var(--frontui-ink)]">
-                                          {conversationTitle(conversation)}
-                                        </p>
-                                      </div>
+                  return (
+                    <>
+                      {order.map((groupKey) => {
+                        const items = grouped.get(groupKey) || [];
+                        if (items.length === 0) return null;
+
+                        return (
+                          <div key={groupKey} className="mb-4">
+                            <h3 className="mb-2 ml-3 text-xs font-semibold uppercase tracking-[0.19em] text-[var(--frontui-muted)]">
+                              {groupKey === "recent"
+                                ? "Recent"
+                                : groupKey === "yesterday"
+                                  ? "Yesterday"
+                                  : "Past"}
+                            </h3>
+                            <div className="">
+                              {items.map((conversation) => {
+                                const active =
+                                  conversation.id === activeConversationId;
+                                const isEditing = editingId === conversation.id;
+
+                                return (
+                                  <div
+                                    key={conversation.id}
+                                    className={cn(
+                                      `group flex items-center relative message-enter w-full rounded-lg border border-transparent h-9 py-1 text-left transition`,
+                                      active
+                                        ? "border-[var(--frontui-accent)]/20 bg-[var(--frontui-accent-soft)]/20"
+                                        : "hover:bg-[var(--frontui-surface-2)]",
                                     )}
-                                  </Link>
-
-                                  <div className="hidden items-center gap-1 shrink-0 group-hover:flex">
-                                    <Button
-                                      size={"icon"}
-                                      variant="outline"
-                                      className="rounded-full p-1 size-7"
-                                      onClick={() => {
-                                        setEditingId(conversation.id);
-                                      }}
+                                  >
+                                    <Link
+                                      href={`/c/${conversation.id}`}
+                                      className={`w-full px-2 pl-3`}
                                     >
-                                      <Pencil size={10} />
-                                    </Button>
-
-                                    <AlertDialog>
-                                      <AlertDialogTrigger asChild>
-                                        <Button
-                                          size={"icon"}
-                                          variant="outline"
-                                          className="rounded-full p-1 size-7"
-                                        >
-                                          <Trash2 size={10} />
-                                        </Button>
-                                      </AlertDialogTrigger>
-                                      <AlertDialogContent className="">
-                                        <AlertDialogHeader>
-                                          <AlertDialogTitle>
-                                            Confirmation
-                                          </AlertDialogTitle>
-                                          <AlertDialogDescription>
-                                            Are you sure you want to delete
-                                            this?
-                                          </AlertDialogDescription>
-                                        </AlertDialogHeader>
-
-                                        <AlertDialogFooter>
-                                          <AlertDialogCancel>
-                                            Cancel
-                                          </AlertDialogCancel>
-                                          <AlertDialogAction
-                                            onClick={async () => {
-                                              await deleteConversation.mutateAsync(
-                                                {
-                                                  conversationId:
-                                                    conversation.id,
-                                                },
-                                              );
+                                      {isEditing ? (
+                                        <div className="relative">
+                                          <input
+                                            ref={inputRef}
+                                            type="text"
+                                            value={editValue}
+                                            onChange={(e) =>
+                                              setEditValue(e.target.value)
+                                            }
+                                            onBlur={() =>
+                                              handleBlur(conversation.id)
+                                            }
+                                            onKeyDown={(e) =>
+                                              handleKeyDown(e, conversation.id)
+                                            }
+                                            className="w-full rounded border border-[var(--frontui-line)] bg-[var(--frontui-surface)] px-2 py-1 text-sm text-[var(--frontui-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--frontui-accent)]"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setEditingId(null);
+                                              setEditValue("");
                                             }}
+                                            className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-[var(--frontui-muted)] hover:text-[var(--frontui-ink)]"
                                           >
-                                            Continue
-                                          </AlertDialogAction>
-                                        </AlertDialogFooter>
-                                      </AlertDialogContent>
-                                    </AlertDialog>
+                                            <X size={14} />
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center justify-between gap-2">
+                                          <p className="line-clamp-1 text-sm text-[var(--frontui-ink)]">
+                                            {conversationTitle(conversation)}
+                                          </p>
+                                        </div>
+                                      )}
+                                    </Link>
+
+                                    <div className="hidden items-center gap-1 shrink-0 group-hover:flex">
+                                      <Button
+                                        size={"icon"}
+                                        variant="outline"
+                                        className="rounded-full p-1 size-7"
+                                        onClick={() => {
+                                          setEditingId(conversation.id);
+                                        }}
+                                      >
+                                        <Pencil size={10} />
+                                      </Button>
+
+                                      <AlertDialog>
+                                        <AlertDialogTrigger asChild>
+                                          <Button
+                                            size={"icon"}
+                                            variant="outline"
+                                            className="rounded-full p-1 size-7"
+                                          >
+                                            <Trash2 size={10} />
+                                          </Button>
+                                        </AlertDialogTrigger>
+                                        <AlertDialogContent className="">
+                                          <AlertDialogHeader>
+                                            <AlertDialogTitle>
+                                              Confirmation
+                                            </AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                              Are you sure you want to delete
+                                              this?
+                                            </AlertDialogDescription>
+                                          </AlertDialogHeader>
+
+                                          <AlertDialogFooter>
+                                            <AlertDialogCancel>
+                                              Cancel
+                                            </AlertDialogCancel>
+                                            <AlertDialogAction
+                                              onClick={async () => {
+                                                await deleteConversation.mutateAsync(
+                                                  {
+                                                    conversationId:
+                                                      conversation.id,
+                                                  },
+                                                );
+                                              }}
+                                            >
+                                              Continue
+                                            </AlertDialogAction>
+                                          </AlertDialogFooter>
+                                        </AlertDialogContent>
+                                      </AlertDialog>
+                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })}
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </>
-                );
-              })()
-            )}
+                        );
+                      })}
+                    </>
+                  );
+                })()
+              )}
+            </div>
           </div>
-        ) : <div className="h-[80vh]"></div>}
+        ) : (
+          <div className="h-[80vh]"></div>
+        )}
 
         <div className="sticky bottom-0 left-0 py-2 px-3 w-full bg-amber-50/5 backdrop-blur-3xl">
           <div className="w-full">
@@ -330,7 +337,7 @@ export function ConversationSidebar() {
               onClick={() => {
                 router.push("/settings");
               }}
-              size={!sidebarAtom.open ? 'icon' : 'sm'}
+              size={!sidebarAtom.open ? "icon" : "sm"}
             >
               <SettingsIcon size={13} />
               {sidebarAtom.open && <span>Settings</span>}

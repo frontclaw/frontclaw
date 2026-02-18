@@ -28,9 +28,24 @@ export interface ToolDefinition {
 }
 
 /** Tool execution result */
+export interface ToolResponseControl {
+  mode: "handoff_to_llm" | "end_request";
+  response?: unknown;
+}
+
+export interface ToolResponseEnvelope {
+  __frontclaw?: ToolResponseControl;
+  data?: unknown;
+}
+
 export interface ToolResult {
   success: boolean;
-  result?: unknown;
+  /**
+   * By default, returned result is handed back to the LLM as tool output.
+   * To end the request directly from a tool, return:
+   * { __frontclaw: { mode: "end_request", response: "..." }, data?: ... }
+   */
+  result?: unknown | ToolResponseEnvelope;
   error?: string;
 }
 
