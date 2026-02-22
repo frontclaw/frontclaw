@@ -35,7 +35,7 @@ export function ChatComposer({
     <div className="absolute bottom-4 left-2/4 w-full max-w-3xl">
       <div className="mx-auto max-w-3xl">
         {errorText ? (
-          <p className="absolute left-2/4 bottom-20 -translate-x-2/4 mb-2 rounded-lg border border-[#e8c7bd] bg-[#fff2ed] px-3 py-2 text-sm text-[#8c3e21]">
+          <p className="absolute left-2/4 bottom-20 -translate-x-2/4 mb-2 rounded-lg border border-[#f1b5ad] bg-[#fdecea] px-3 py-2 text-sm font-medium text-[#b42318]">
             {errorText}
           </p>
         ) : null}

@@ -1,0 +1,16 @@
+{
+  "name": "@workspace/cli",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "frontclaw": "./bin/frontclaw.js"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings 0"
+  },
+  "devDependencies": {
+    "@workspace/eslint-config": "workspace:*",
+    "eslint": "^9.39.2"
+  }
+}

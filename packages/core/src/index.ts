@@ -17,11 +17,12 @@ export {
 // Bridge
 export {
   createSysCallHandler,
+  DockerPluginBridge,
   PermissionDeniedError,
   PermissionGuard,
-  PluginWorkerBridge,
   type BridgeConfig,
-  type DBAdapter,
+  type LLMAdapter,
+  type PluginBridge,
   type SysCallDependencies,
   type SysCallHandler,
   type SystemLogger,

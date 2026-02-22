@@ -3,12 +3,7 @@
  * Validates and enforces plugin permissions for system calls
  */
 
-import type {
-  LoadedPluginManifest,
-  Permissions,
-  DBPermission,
-  NetworkPermission,
-} from "@workspace/plugin-sdk";
+import type { LoadedPluginManifest } from "@workspace/plugin-sdk";
 import { parseRouteSpec, routeMatches } from "./permission-route-utils.js";
 
 /** Permission violation error */
@@ -33,34 +28,29 @@ export class PermissionGuard {
   constructor(private readonly manifest: LoadedPluginManifest) {}
 
   /**
-   * Check if plugin has database access
+   * Check if plugin can read its local state
    */
-  checkDBAccess(table: string, write = false): void {
-    const dbPerm = this.manifest.permissions.db;
-
-    if (!dbPerm) {
+  checkStateRead(): void {
+    const statePerm = this.manifest.permissions.state;
+    if (!statePerm?.enabled || statePerm.read === false) {
       throw new PermissionDeniedError(
         this.manifest.id,
-        "db",
-        `access table '${table}'`,
+        "state.read",
+        "read plugin state",
       );
     }
+  }
 
-    // Check if table is in allowed list
-    if (!dbPerm.tables.includes(table) && !dbPerm.tables.includes("*")) {
+  /**
+   * Check if plugin can write its local state
+   */
+  checkStateWrite(): void {
+    const statePerm = this.manifest.permissions.state;
+    if (!statePerm?.enabled || statePerm.write === false) {
       throw new PermissionDeniedError(
         this.manifest.id,
-        "db.tables",
-        `access table '${table}'`,
-      );
-    }
-
-    // Check write access
-    if (write && dbPerm.access === "read-only") {
-      throw new PermissionDeniedError(
-        this.manifest.id,
-        "db.access",
-        `write to table '${table}'`,
+        "state.write",
+        "write plugin state",
       );
     }
   }
@@ -68,7 +58,7 @@ export class PermissionGuard {
   /**
    * Check if plugin can fetch a URL
    */
-  checkNetworkAccess(url: string): void {
+  checkNetworkAccess(url: string, method = "GET"): void {
     const netPerm = this.manifest.permissions.network;
 
     if (!netPerm) {
@@ -86,9 +76,10 @@ export class PermissionGuard {
 
     // Parse the URL to get the domain
     let domain: string;
+    let normalizedUrl: URL;
     try {
-      const parsed = new URL(url);
-      domain = parsed.hostname;
+      normalizedUrl = new URL(url);
+      domain = normalizedUrl.hostname;
     } catch {
       throw new PermissionDeniedError(
         this.manifest.id,
@@ -97,10 +88,59 @@ export class PermissionGuard {
       );
     }
 
-    // Check if domain is allowed
-    const isAllowed = netPerm.allowed_domains.some((allowed) => {
+    const endpointPerms = netPerm.allowed_http_endpoints ?? [];
+    const domainPerms = netPerm.allowed_domains ?? [];
+
+    // If endpoint-level permissions are provided, they fully define allowed egress.
+    // In this mode, allowed_domains is optional (no duplication required).
+    if (endpointPerms.length > 0) {
+      const methodUpper = method.toUpperCase();
+      const target = `${normalizedUrl.origin}${normalizedUrl.pathname}`;
+      const endpointAllowed = endpointPerms.some((entry) => {
+        const trimmed = entry.trim();
+        if (!trimmed) return false;
+
+        const firstSpace = trimmed.indexOf(" ");
+        let allowedMethod = "*";
+        let urlPattern = trimmed;
+        if (firstSpace > 0) {
+          allowedMethod = trimmed.slice(0, firstSpace).toUpperCase();
+          urlPattern = trimmed.slice(firstSpace + 1).trim();
+        }
+
+        if (allowedMethod !== "*" && allowedMethod !== methodUpper) {
+          return false;
+        }
+
+        if (urlPattern.endsWith("*")) {
+          const prefix = urlPattern.slice(0, -1);
+          return target.startsWith(prefix);
+        }
+
+        return target === urlPattern;
+      });
+
+      if (!endpointAllowed) {
+        throw new PermissionDeniedError(
+          this.manifest.id,
+          "network.allowed_http_endpoints",
+          `fetch endpoint '${methodUpper} ${target}'`,
+        );
+      }
+      return;
+    }
+
+    // Fallback to domain-level allowlist when no endpoint rules are provided.
+    if (domainPerms.length === 0) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "network",
+        `fetch '${url}'`,
+      );
+    }
+
+    const isAllowed = domainPerms.some((allowed) => {
       if (allowed.startsWith("*.")) {
-        // Wildcard subdomain matching
         const base = allowed.slice(2);
         return domain === base || domain.endsWith(`.${base}`);
       }
@@ -164,6 +204,48 @@ export class PermissionGuard {
         this.manifest.id,
         "llm.can_modify_response",
         "modify LLM response",
+      );
+    }
+  }
+
+  /**
+   * Check if plugin can call the host LLM adapter
+   */
+  checkLLMInvocation(model?: string, provider?: string): void {
+    const llmPerm = this.manifest.permissions.llm;
+    if (!llmPerm?.can_call_provider) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "llm.can_call_provider",
+        "invoke LLM provider",
+      );
+    }
+
+    const allowedProviders = llmPerm.allowed_providers ?? [];
+    if (
+      provider &&
+      allowedProviders.length > 0 &&
+      !allowedProviders.includes(provider) &&
+      !allowedProviders.includes("*")
+    ) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "llm.allowed_providers",
+        `use provider '${provider}'`,
+      );
+    }
+
+    const allowedModels = llmPerm.allowed_models ?? [];
+    if (
+      model &&
+      allowedModels.length > 0 &&
+      !allowedModels.includes(model) &&
+      !allowedModels.includes("*")
+    ) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "llm.allowed_models",
+        `use model '${model}'`,
       );
     }
   }
@@ -295,6 +377,48 @@ export class PermissionGuard {
     }
   }
 
+  /**
+   * Check if plugin can read from plugin-local filesystem path
+   */
+  checkFSRead(path: string): void {
+    const fsPerm = this.manifest.permissions.fs?.read || [];
+    if (fsPerm.length === 0) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "fs.read",
+        `read path '${path}'`,
+      );
+    }
+    if (!this.matchesPath(path, fsPerm)) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "fs.read",
+        `read path '${path}'`,
+      );
+    }
+  }
+
+  /**
+   * Check if plugin can write to plugin-local filesystem path
+   */
+  checkFSWrite(path: string): void {
+    const fsPerm = this.manifest.permissions.fs?.write || [];
+    if (fsPerm.length === 0) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "fs.write",
+        `write path '${path}'`,
+      );
+    }
+    if (!this.matchesPath(path, fsPerm)) {
+      throw new PermissionDeniedError(
+        this.manifest.id,
+        "fs.write",
+        `write path '${path}'`,
+      );
+    }
+  }
+
   private matchesKey(key: string, patterns: string[]): boolean {
     const normalizedKey = key.trim();
     return patterns.some((pattern) => {
@@ -304,6 +428,33 @@ export class PermissionGuard {
         return normalizedKey.startsWith(prefix);
       }
       return normalizedKey === pattern;
+    });
+  }
+
+  private matchesPath(path: string, patterns: string[]): boolean {
+    const normalizedPath = path
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\.\/+/, "")
+      .replace(/^\/+/, "");
+
+    return patterns.some((rawPattern) => {
+      const pattern = rawPattern
+        .trim()
+        .replaceAll("\\", "/")
+        .replace(/^\.\/+/, "")
+        .replace(/^\/+/, "");
+      if (pattern === "*" || pattern === "**") return true;
+      if (pattern.endsWith("/**")) {
+        const prefix = pattern.slice(0, -3);
+        return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);
+      }
+      if (pattern.endsWith("/*")) {
+        const prefix = pattern.slice(0, -2);
+        if (!normalizedPath.startsWith(`${prefix}/`)) return false;
+        return !normalizedPath.slice(prefix.length + 1).includes("/");
+      }
+      return normalizedPath === pattern;
     });
   }
 

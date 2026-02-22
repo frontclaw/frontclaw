@@ -7,6 +7,17 @@
     "name": "Frontclaw Team"
   },
   "priority": 0,
+  "runtime": "docker",
+  "docker": {
+    "image": "oven/bun:1.3.2",
+    "command": [
+      "bun",
+      "index.ts"
+    ],
+    "workdir": "/plugin",
+    "network": "none",
+    "readOnlyRootFs": true
+  },
   "permissions": {
     "llm": {
       "can_intercept_task": true,
@@ -14,11 +25,18 @@
       "can_modify_system_message": true
     },
     "api": {
-      "routes": ["GET,POST /security/stats", "GET /security/config"]
+      "routes": [
+        "GET,POST /security/stats",
+        "GET /security/config"
+      ]
     },
     "log": {
       "enabled": true,
-      "levels": ["info", "warn", "error"]
+      "levels": [
+        "info",
+        "warn",
+        "error"
+      ]
     }
   },
   "configSchema": {
@@ -31,24 +49,47 @@
       },
       "forbidden_patterns": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Patterns that indicate prompt injection attempts"
       },
       "markdown_rules": {
         "type": "object",
         "properties": {
-          "allow_html": { "type": "boolean", "default": false },
-          "max_header_level": { "type": "number", "default": 2 },
-          "block_images": { "type": "boolean", "default": true },
-          "block_links": { "type": "boolean", "default": false },
-          "max_code_block_lines": { "type": "number", "default": 100 }
+          "allow_html": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_header_level": {
+            "type": "number",
+            "default": 2
+          },
+          "block_images": {
+            "type": "boolean",
+            "default": true
+          },
+          "block_links": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_code_block_lines": {
+            "type": "number",
+            "default": 100
+          }
         }
       },
       "rate_limit": {
         "type": "object",
         "properties": {
-          "enabled": { "type": "boolean", "default": true },
-          "max_requests_per_minute": { "type": "number", "default": 60 }
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "max_requests_per_minute": {
+            "type": "number",
+            "default": 60
+          }
         }
       }
     }
@@ -81,6 +122,11 @@
     }
   },
   "main": "index.ts",
-  "tags": ["security", "safety", "prompt-injection", "markdown"],
-  "enabled": true
+  "tags": [
+    "security",
+    "safety",
+    "prompt-injection",
+    "markdown"
+  ],
+  "enabled": false
 }

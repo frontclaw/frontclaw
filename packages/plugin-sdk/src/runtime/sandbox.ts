@@ -12,7 +12,6 @@ import type {
   PluginInterceptResult,
   RPCHookRequest,
   RPCMessage,
-  SandboxedDB,
   SandboxedLogger,
 } from "../types/index.js";
 import {
@@ -35,6 +34,7 @@ let pluginConfig: Record<string, unknown> = {};
 
 /** Plugin permissions */
 let pluginPermissions: Permissions = {
+  state: { enabled: true, read: true, write: true },
   log: { enabled: true, levels: ["debug", "info", "warn", "error"] },
 };
 
@@ -67,23 +67,6 @@ function dispatchSysCall<T = unknown>(
       }
     }, 30000);
   });
-}
-
-/**
- * Create the sandboxed database interface
- */
-function createSandboxedDB(): SandboxedDB {
-  return {
-    async query(sql, params) {
-      return dispatchSysCall("db.query", { sql, params });
-    },
-    async getItems(table, options) {
-      return dispatchSysCall("db.getItems", { table, ...options });
-    },
-    async getItem(table, id) {
-      return dispatchSysCall("db.getItem", { table, id });
-    },
-  };
 }
 
 /**
@@ -181,6 +164,29 @@ function createSandboxedMemory() {
 }
 
 /**
+ * Create sandboxed plugin-local state interface
+ */
+function createSandboxedState() {
+  return {
+    async get<T = unknown>(key: string): Promise<T | null> {
+      return dispatchSysCall("state.get", { key });
+    },
+    async set<T = unknown>(key: string, value: T): Promise<void> {
+      await dispatchSysCall("state.set", { key, value });
+    },
+    async delete(key: string): Promise<void> {
+      await dispatchSysCall("state.delete", { key });
+    },
+    async list(prefix?: string): Promise<string[]> {
+      return dispatchSysCall("state.list", { prefix });
+    },
+    async clear(): Promise<void> {
+      await dispatchSysCall("state.clear", {});
+    },
+  };
+}
+
+/**
  * Create the sandboxed skills interface
  */
 function createSandboxedSkills() {
@@ -203,6 +209,51 @@ function createSandboxedSkills() {
 }
 
 /**
+ * Create the sandboxed filesystem interface
+ */
+function createSandboxedFS() {
+  return {
+    async readText(path: string): Promise<string> {
+      return dispatchSysCall("fs.readText", { path });
+    },
+    async writeText(path: string, content: string): Promise<void> {
+      await dispatchSysCall("fs.writeText", { path, content });
+    },
+    async list(path?: string): Promise<string[]> {
+      return dispatchSysCall("fs.list", { path });
+    },
+  };
+}
+
+/**
+ * Create the sandboxed LLM interface
+ */
+function createSandboxedLLM() {
+  return {
+    async chat(options: {
+      messages: Array<{
+        role: "system" | "user" | "assistant";
+        content: string;
+      }>;
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      model?: string;
+      provider?: string;
+    }): Promise<{
+      content: string;
+      usage: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+      };
+    }> {
+      return dispatchSysCall("llm.chat", options);
+    },
+  };
+}
+
+/**
  * Create the plugin context
  */
 function createContext(): PluginContext {
@@ -210,11 +261,13 @@ function createContext(): PluginContext {
     config: pluginConfig,
     permissions: pluginPermissions,
     pluginId,
-    db: createSandboxedDB(),
     fetch: createSandboxedFetch(),
     log: createSandboxedLogger(),
     memory: createSandboxedMemory(),
+    state: createSandboxedState(),
     skills: createSandboxedSkills(),
+    fs: createSandboxedFS(),
+    llm: createSandboxedLLM(),
     error(code: string, message: string): PluginError {
       const err = new Error(message) as PluginError;
       err.name = "PluginError";

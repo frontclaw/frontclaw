@@ -8,10 +8,11 @@ import remarkGfm from "remark-gfm";
 
 type MessageMarkdownProps = {
   content: string;
+  streaming?: boolean;
 };
 
 export const MessageMarkdown = React.memo(
-  ({ content }: MessageMarkdownProps) => {
+  ({ content, streaming = false }: MessageMarkdownProps) => {
     return (
       <div className={cn("frontui-markdown max-w-3xl", "max-w-[calc(768px-36px)]")}>
         <ReactMarkdown
@@ -38,6 +39,18 @@ export const MessageMarkdown = React.memo(
               const language = languageMatch?.[1] ?? "text";
               const code = String(children).replace(/\n$/, "");
               if (isBlock) {
+                if (streaming) {
+                  return (
+                    <div className="rounded-lg border border-[var(--frontui-line)] bg-[#0f1115]">
+                      <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-[#9aa3b2]">
+                        {language}
+                      </div>
+                      <pre className="m-0 overflow-auto px-3 pb-3 pt-1 text-xs leading-6 text-[#e6edf3]">
+                        <code>{code}</code>
+                      </pre>
+                    </div>
+                  );
+                }
                 return (
                   <div className="">
                     <ShikiHighlighter

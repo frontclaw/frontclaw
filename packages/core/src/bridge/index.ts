@@ -4,17 +4,18 @@
  */
 
 export {
-  PluginWorkerBridge,
   type BridgeConfig,
   type SysCallHandler,
-} from "./worker-bridge.js";
+} from "./bridge-types.js";
+export { DockerPluginBridge } from "./docker-bridge.js";
+export type { PluginBridge } from "./plugin-bridge.js";
 export { PermissionGuard, PermissionDeniedError } from "./permission-guard.js";
 export {
   createSysCallHandler,
 } from "./syscall-handler.js";
 export type {
   SystemLogger,
-  DBAdapter,
+  LLMAdapter,
   SysCallDependencies,
   SysCallOrchestrator,
 } from "./types.js";

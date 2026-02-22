@@ -1,0 +1,39 @@
+{
+  "id": "newplug",
+  "name": "newplug",
+  "version": "1.0.0",
+  "description": "A Frontclaw plugin scaffold for newplug",
+  "author": {
+    "name": "Frontclaw Team"
+  },
+  "priority": 100,
+  "runtime": "docker",
+  "docker": {
+    "image": "oven/bun:1.3.2",
+    "command": [
+      "bun",
+      "src/plugin.ts"
+    ],
+    "workdir": "/plugin",
+    "network": "none",
+    "readOnlyRootFs": true,
+    "pidsLimit": 128,
+    "memoryMb": 256,
+    "startupTimeoutSec": 120
+  },
+  "permissions": {
+    "log": {
+      "enabled": true,
+      "levels": [
+        "info",
+        "warn",
+        "error"
+      ]
+    }
+  },
+  "main": "src/plugin.ts",
+  "tags": [
+    "scaffold"
+  ],
+  "enabled": false
+}

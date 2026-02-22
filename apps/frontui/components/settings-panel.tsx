@@ -3,9 +3,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Loader2, Save } from "lucide-react";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog";
+import {
   fetchConfig,
+  fetchPlugins,
   saveConfig,
+  setPluginEnabled,
   type FrontclawConfig,
+  type PluginInfo,
 } from "@/lib/frontclaw-api";
 
 const providers = ["openai", "anthropic", "google"];
@@ -62,8 +72,11 @@ function normalizeConfig(config: FrontclawConfig): FrontclawConfig {
 
 export function SettingsPanel() {
   const [config, setConfig] = useState<FrontclawConfig>(defaultConfig);
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [updatingPluginId, setUpdatingPluginId] = useState<string | null>(null);
+  const [selectedPlugin, setSelectedPlugin] = useState<PluginInfo | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,8 +84,12 @@ export function SettingsPanel() {
     const load = async () => {
       try {
         setLoading(true);
-        const loaded = await fetchConfig();
+        const [loaded, pluginList] = await Promise.all([
+          fetchConfig(),
+          fetchPlugins(),
+        ]);
         setConfig(normalizeConfig(loaded));
+        setPlugins(pluginList);
       } catch (loadError) {
         setError((loadError as Error).message);
       } finally {
@@ -131,8 +148,33 @@ export function SettingsPanel() {
     }
   };
 
+  const onTogglePlugin = async (plugin: PluginInfo) => {
+    const nextEnabled = !plugin.enabled;
+    setUpdatingPluginId(plugin.id);
+    setError(null);
+    setStatus(null);
+
+    try {
+      const updated = await setPluginEnabled(plugin.id, nextEnabled);
+      setPlugins((current) =>
+        current.map((item) =>
+          item.id === updated.id
+            ? { ...item, enabled: updated.enabled, active: updated.active }
+            : item,
+        ),
+      );
+      setStatus(
+        `Plugin '${plugin.name || plugin.id}' ${nextEnabled ? "enabled" : "disabled"} and refreshed`,
+      );
+    } catch (toggleError) {
+      setError((toggleError as Error).message);
+    } finally {
+      setUpdatingPluginId(null);
+    }
+  };
+
   return (
-    <section className="grid min-h-[calc(100dvh-4rem)] gap-6 p-4 md:p-6 overflow-auto">
+    <section className="grid h-screen gap-6 p-4 md:p-6 overflow-auto">
       <div className="card-elevated rounded-2xl p-5 md:p-7">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -306,6 +348,136 @@ export function SettingsPanel() {
           </section>
         </div>
       )}
+
+      {!loading ? (
+        <section className="card-elevated rounded-2xl p-5 md:p-6">
+          <h3 className="mb-1 text-lg font-semibold text-[var(--frontui-ink)]">
+            Plugins
+          </h3>
+          <p className="mb-4 text-sm text-[var(--frontui-muted)]">
+            Enable or disable plugins, then runtime refresh is applied automatically.
+          </p>
+
+          {plugins.length === 0 ? (
+            <p className="text-sm text-[var(--frontui-muted)]">
+              No plugins discovered.
+            </p>
+          ) : (
+            <div className="grid gap-3">
+              {plugins.map((plugin) => {
+                const busy = updatingPluginId === plugin.id;
+                return (
+                    <div
+                      key={plugin.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedPlugin(plugin)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedPlugin(plugin);
+                        }
+                      }}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-[var(--frontui-line)] bg-[var(--frontui-surface)] px-3 py-3"
+                    >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-[var(--frontui-ink)]">
+                        {plugin.name || plugin.id}
+                      </p>
+                      <p className="truncate text-xs text-[var(--frontui-muted)]">
+                        {plugin.id}
+                        {plugin.version ? ` • v${plugin.version}` : ""}
+                        {plugin.active ? " • active" : " • inactive"}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onTogglePlugin(plugin);
+                      }}
+                      disabled={busy || saving}
+                      className={`inline-flex min-w-24 items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        plugin.enabled
+                          ? "bg-[#dbf3e4] text-[#1f6b3b]"
+                          : "bg-[#f2e4e2] text-[#8d2e1f]"
+                      }`}
+                    >
+                      {busy ? <Loader2 className="animate-spin" size={14} /> : null}
+                      {plugin.enabled ? "Enabled" : "Disabled"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <Dialog
+        open={Boolean(selectedPlugin)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedPlugin(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl max-h-[80dvh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedPlugin?.name || selectedPlugin?.id || "Plugin Details"}
+            </DialogTitle>
+            <DialogDescription>
+              Full plugin details from manifest, including permissions and runtime.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedPlugin ? (
+            <div className="grid gap-4">
+              <div className="grid gap-2 rounded-lg border border-[var(--frontui-line)] p-3">
+                <p className="text-xs uppercase tracking-wide text-[var(--frontui-muted)]">
+                  Overview
+                </p>
+                <p className="text-sm text-[var(--frontui-ink)]">
+                  <strong>ID:</strong> {selectedPlugin.id}
+                </p>
+                <p className="text-sm text-[var(--frontui-ink)]">
+                  <strong>Version:</strong> {selectedPlugin.version || "-"}
+                </p>
+                <p className="text-sm text-[var(--frontui-ink)]">
+                  <strong>Runtime:</strong> {selectedPlugin.runtime || "-"}
+                </p>
+                <p className="text-sm text-[var(--frontui-ink)]">
+                  <strong>Status:</strong>{" "}
+                  {selectedPlugin.enabled ? "enabled" : "disabled"} /{" "}
+                  {selectedPlugin.active ? "active" : "inactive"}
+                </p>
+                <p className="text-sm text-[var(--frontui-ink)]">
+                  <strong>Description:</strong>{" "}
+                  {selectedPlugin.description || "No description"}
+                </p>
+              </div>
+
+              <div className="grid gap-2 rounded-lg border border-[var(--frontui-line)] p-3">
+                <p className="text-xs uppercase tracking-wide text-[var(--frontui-muted)]">
+                  Permissions
+                </p>
+                <pre className="overflow-auto rounded-md bg-[#f7f8fa] p-3 text-xs text-[var(--frontui-ink)]">
+                  {JSON.stringify(selectedPlugin.permissions ?? {}, null, 2)}
+                </pre>
+              </div>
+
+              <div className="grid gap-2 rounded-lg border border-[var(--frontui-line)] p-3">
+                <p className="text-xs uppercase tracking-wide text-[var(--frontui-muted)]">
+                  Full Manifest
+                </p>
+                <pre className="overflow-auto rounded-md bg-[#f7f8fa] p-3 text-xs text-[var(--frontui-ink)]">
+                  {JSON.stringify(selectedPlugin.manifest ?? selectedPlugin, null, 2)}
+                </pre>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

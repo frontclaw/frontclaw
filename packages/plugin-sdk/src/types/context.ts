@@ -5,34 +5,6 @@
 
 import type { Permissions } from "./permissions";
 
-/** Database query result */
-export interface DBQueryResult<T = unknown> {
-  rows: T[];
-  rowCount: number;
-}
-
-/** Sandboxed database interface */
-export interface SandboxedDB {
-  /** Execute a read query */
-  query<T = unknown>(
-    sql: string,
-    params?: unknown[],
-  ): Promise<DBQueryResult<T>>;
-
-  /** Get items from a table (if permitted) */
-  getItems<T = unknown>(
-    table: string,
-    options?: {
-      where?: Record<string, unknown>;
-      limit?: number;
-      offset?: number;
-    },
-  ): Promise<T[]>;
-
-  /** Get a single item by ID */
-  getItem<T = unknown>(table: string, id: string): Promise<T | null>;
-}
-
 /** Sandboxed fetch interface */
 export interface SandboxedFetch {
   (url: string, init?: RequestInit): Promise<Response>;
@@ -58,12 +30,50 @@ export interface SandboxedMemory {
   list(prefix?: string, options?: { limit?: number }): Promise<string[]>;
 }
 
+/** Sandboxed plugin-local state interface */
+export interface SandboxedState {
+  get<T = unknown>(key: string): Promise<T | null>;
+  set<T = unknown>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(prefix?: string): Promise<string[]>;
+  clear(): Promise<void>;
+}
+
 /** Sandboxed skills interface */
 export interface SandboxedSkills {
   invoke<T = unknown>(
     skillName: string,
     args: Record<string, unknown>,
   ): Promise<T>;
+}
+
+/** Sandboxed filesystem interface (plugin-local paths only) */
+export interface SandboxedFS {
+  readText(path: string): Promise<string>;
+  writeText(path: string, content: string): Promise<void>;
+  list(path?: string): Promise<string[]>;
+}
+
+/** Sandboxed LLM interface */
+export interface SandboxedLLM {
+  chat(options: {
+    messages: Array<{
+      role: "system" | "user" | "assistant";
+      content: string;
+    }>;
+    systemPrompt?: string;
+    maxTokens?: number;
+    temperature?: number;
+    model?: string;
+    provider?: string;
+  }): Promise<{
+    content: string;
+    usage: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    };
+  }>;
 }
 
 /** Socket client interface passed to plugins */
@@ -84,9 +94,6 @@ export interface PluginContext {
   /** Plugin ID */
   readonly pluginId: string;
 
-  /** Sandboxed database access */
-  readonly db: SandboxedDB;
-
   /** Sandboxed fetch (respects network permissions) */
   readonly fetch: SandboxedFetch;
 
@@ -96,8 +103,17 @@ export interface PluginContext {
   /** Sandboxed memory */
   readonly memory: SandboxedMemory;
 
+  /** Sandboxed plugin-local state */
+  readonly state: SandboxedState;
+
   /** Sandboxed skills */
   readonly skills: SandboxedSkills;
+
+  /** Sandboxed filesystem access */
+  readonly fs: SandboxedFS;
+
+  /** Sandboxed LLM access */
+  readonly llm: SandboxedLLM;
 
   /** Create a security error that stops the pipeline */
   error(code: string, message: string): PluginError;

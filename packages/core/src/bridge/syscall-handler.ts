@@ -9,6 +9,8 @@ import type {
   SysCallDependencies,
   SysCallOrchestrator,
 } from "./types.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 const SYSCALL_WINDOW_MS = 60_000;
 const MAX_SYSCALLS_PER_WINDOW = 300;
@@ -49,73 +51,114 @@ function enforceSysCallRateLimit(pluginId: string): void {
   currentState.count += 1;
 }
 
-function stripQuotedSegments(sql: string): string {
-  return sql.replace(/'(?:''|[^'])*'/g, " ");
-}
-
-function normalizeSqlForAnalysis(sql: string): string {
-  return stripQuotedSegments(sql)
-    .replace(/--.*$/gm, " ")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function extractTableName(raw: string): string | null {
-  const normalized = raw
-    .replace(/["'`]/g, "")
-    .split(".")
-    .at(-1)
-    ?.trim();
-
-  if (!normalized) return null;
-  if (!/^[a-zA-Z_][\w$]*$/.test(normalized)) return null;
+function normalizeStateKey(key: string): string {
+  const normalized = key.trim().replaceAll("\\", "/");
+  if (!normalized) {
+    throw new Error("State key cannot be empty");
+  }
+  if (normalized.includes("..")) {
+    throw new Error("State key cannot contain '..'");
+  }
+  if (normalized.length > 200) {
+    throw new Error("State key exceeds maximum length");
+  }
   return normalized;
 }
 
-function extractTables(sql: string): string[] {
-  const normalizedSql = normalizeSqlForAnalysis(sql);
-  const tables = new Set<string>();
-  const patterns = [
-    /\bFROM\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
-    /\bJOIN\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
-    /\bINTO\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
-    /\bUPDATE\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
-    /\bDELETE\s+FROM\s+([`"]?[a-zA-Z_][\w$]*[`"]?(?:\.[`"]?[a-zA-Z_][\w$]*[`"]?)?)/gi,
-  ];
-
-  for (const pattern of patterns) {
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(normalizedSql)) !== null) {
-      const table = extractTableName(match[1] ?? "");
-      if (table) tables.add(table);
-    }
-  }
-
-  return Array.from(tables);
+function toStateStorageKey(pluginId: string, key: string): string {
+  return `state:${pluginId}:${key}`;
 }
 
-function isWriteQuery(sql: string): boolean {
-  const normalizedSql = normalizeSqlForAnalysis(sql);
-  return /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE)\b/i.test(
-    normalizedSql,
-  );
+function pluginStatePrefix(pluginId: string): string {
+  return `state:${pluginId}:`;
 }
 
-function validateSingleStatement(sql: string, pluginId: string): void {
-  const normalizedSql = normalizeSqlForAnalysis(sql);
-  const statements = normalizedSql
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
-
-  if (statements.length > 1) {
+function resolvePluginRelativePath(
+  manifest: LoadedPluginManifest,
+  inputPath: string,
+): { absolutePath: string; relativePath: string } {
+  const normalizedInput = inputPath.trim();
+  if (!normalizedInput) {
     throw new PermissionDeniedError(
-      pluginId,
-      "db.query",
-      "execute multiple SQL statements",
+      manifest.id,
+      "fs.path",
+      "access empty path",
     );
   }
+
+  const pluginRoot = path.resolve(manifest.pluginPath);
+  const resolvedPath = path.resolve(pluginRoot, normalizedInput);
+  const relativePath = path.relative(pluginRoot, resolvedPath);
+
+  const isInsidePluginRoot =
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+
+  if (!isInsidePluginRoot) {
+    throw new PermissionDeniedError(
+      manifest.id,
+      "fs.path",
+      `access path outside plugin root '${inputPath}'`,
+    );
+  }
+
+  const normalizedRelativePath = relativePath
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
+
+  return {
+    absolutePath: resolvedPath,
+    relativePath: normalizedRelativePath || ".",
+  };
+}
+
+function toSysCallDebugMeta(
+  method: string,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (method === "network.fetch") {
+    return {
+      url: payload.url,
+      method: payload.method || "GET",
+    };
+  }
+  if (method === "skills.invoke") {
+    return {
+      skillName: payload.skillName,
+    };
+  }
+  if (method === "llm.chat") {
+    const messages = Array.isArray(payload.messages)
+      ? payload.messages.length
+      : undefined;
+    return {
+      model: payload.model,
+      provider: payload.provider,
+      maxTokens: payload.maxTokens,
+      messages,
+    };
+  }
+  if (
+    method === "fs.readText" ||
+    method === "fs.writeText" ||
+    method === "fs.list" ||
+    method === "state.get" ||
+    method === "state.set" ||
+    method === "state.delete" ||
+    method === "state.list" ||
+    method === "memory.get" ||
+    method === "memory.set" ||
+    method === "memory.delete" ||
+    method === "memory.list" ||
+    method === "memory.ttl"
+  ) {
+    return {
+      key: payload.key,
+      path: payload.path,
+      prefix: payload.prefix,
+    };
+  }
+  return {};
 }
 
 /**
@@ -134,40 +177,62 @@ export function createSysCallHandler(
 
     const guard = new PermissionGuard(manifest);
     const data = payload as Record<string, unknown>;
+    deps.logger.debug(`[${manifest.id}] syscall ${method}`, {
+      method,
+      ...toSysCallDebugMeta(method, data),
+    });
 
-    if (method === "db.query") {
-      const { sql, params } = data as { sql: string; params?: unknown[] };
-      validateSingleStatement(sql, manifest.id);
-      const tables = extractTables(sql);
-      const writeQuery = isWriteQuery(sql);
+    if (method === "state.get") {
+      const { key } = data as { key: string };
+      guard.checkStateRead();
+      if (!orchestrator) throw new Error("State service not available");
+      const normalized = normalizeStateKey(key);
+      return orchestrator.memoryGet(toStateStorageKey(manifest.id, normalized));
+    }
 
-      if (tables.length === 0) {
-        // Fail closed unless plugin has wildcard table access.
-        guard.checkDBAccess("*", writeQuery);
-      } else {
-        for (const table of tables) {
-          guard.checkDBAccess(table, writeQuery);
-        }
+    if (method === "state.set") {
+      const { key, value } = data as { key: string; value: unknown };
+      guard.checkStateWrite();
+      if (!orchestrator) throw new Error("State service not available");
+      const normalized = normalizeStateKey(key);
+      await orchestrator.memorySet(
+        toStateStorageKey(manifest.id, normalized),
+        value,
+      );
+      return undefined;
+    }
+
+    if (method === "state.delete") {
+      const { key } = data as { key: string };
+      guard.checkStateWrite();
+      if (!orchestrator) throw new Error("State service not available");
+      const normalized = normalizeStateKey(key);
+      await orchestrator.memoryDelete(toStateStorageKey(manifest.id, normalized));
+      return undefined;
+    }
+
+    if (method === "state.list") {
+      const { prefix } = data as { prefix?: string };
+      guard.checkStateRead();
+      if (!orchestrator) throw new Error("State service not available");
+      const normalizedPrefix = prefix ? normalizeStateKey(prefix) : "";
+      const storagePrefix = `${pluginStatePrefix(manifest.id)}${normalizedPrefix}`;
+      const keys = await orchestrator.memoryList(storagePrefix);
+      const trimPrefix = pluginStatePrefix(manifest.id);
+      return keys.map((key) =>
+        key.startsWith(trimPrefix) ? key.slice(trimPrefix.length) : key
+      );
+    }
+
+    if (method === "state.clear") {
+      guard.checkStateWrite();
+      if (!orchestrator) throw new Error("State service not available");
+      const prefix = pluginStatePrefix(manifest.id);
+      const keys = await orchestrator.memoryList(prefix, { limit: 1000 });
+      for (const key of keys) {
+        await orchestrator.memoryDelete(key);
       }
-
-      return deps.db.query(sql, params);
-    }
-
-    if (method === "db.getItems") {
-      const { table, where, limit, offset } = data as {
-        table: string;
-        where?: Record<string, unknown>;
-        limit?: number;
-        offset?: number;
-      };
-      guard.checkDBAccess(table, false);
-      return deps.db.getItems(table, { where, limit, offset });
-    }
-
-    if (method === "db.getItem") {
-      const { table, id } = data as { table: string; id: string };
-      guard.checkDBAccess(table, false);
-      return deps.db.getItem(table, id);
+      return { cleared: keys.length };
     }
 
     if (method === "network.fetch") {
@@ -183,7 +248,7 @@ export function createSysCallHandler(
         body?: string;
       };
 
-      guard.checkNetworkAccess(url);
+      guard.checkNetworkAccess(url, httpMethod || "GET");
 
       const response = await fetch(url, {
         method: httpMethod || "GET",
@@ -274,6 +339,96 @@ export function createSysCallHandler(
         throw new Error(result.error || "Skill execution failed");
       }
       return result.result;
+    }
+
+    if (method === "fs.readText") {
+      const { path: requestedPath } = data as { path: string };
+      const { absolutePath, relativePath } = resolvePluginRelativePath(
+        manifest,
+        requestedPath,
+      );
+      guard.checkFSRead(relativePath);
+      return fs.readFile(absolutePath, "utf-8");
+    }
+
+    if (method === "fs.writeText") {
+      const { path: requestedPath, content } = data as {
+        path: string;
+        content: string;
+      };
+      const { absolutePath, relativePath } = resolvePluginRelativePath(
+        manifest,
+        requestedPath,
+      );
+      guard.checkFSWrite(relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, content, "utf-8");
+      return undefined;
+    }
+
+    if (method === "fs.list") {
+      const { path: requestedPath } = data as { path?: string };
+      const targetPath = requestedPath || ".";
+      const { absolutePath, relativePath } = resolvePluginRelativePath(
+        manifest,
+        targetPath,
+      );
+      guard.checkFSRead(relativePath);
+      const entries = await fs.readdir(absolutePath, { withFileTypes: true });
+      return entries.map((entry) =>
+        entry.isDirectory() ? `${entry.name}/` : entry.name,
+      );
+    }
+
+    if (method === "llm.chat") {
+      const {
+        messages,
+        systemPrompt,
+        maxTokens,
+        temperature,
+        model,
+        provider,
+      } = data as {
+        messages: Array<{
+          role: "system" | "user" | "assistant";
+          content: string;
+        }>;
+        systemPrompt?: string;
+        maxTokens?: number;
+        temperature?: number;
+        model?: string;
+        provider?: string;
+      };
+
+      guard.checkLLMInvocation(model, provider);
+
+      const maxAllowedTokens = manifest.permissions.llm?.max_tokens_per_request;
+      if (
+        typeof maxAllowedTokens === "number" &&
+        typeof maxTokens === "number" &&
+        maxTokens > maxAllowedTokens
+      ) {
+        throw new PermissionDeniedError(
+          manifest.id,
+          "llm.max_tokens_per_request",
+          `request ${maxTokens} tokens`,
+        );
+      }
+
+      if (!deps.llm) {
+        throw new Error("LLM adapter not available");
+      }
+
+      return deps.llm.chat({
+        messages,
+        systemPrompt,
+        maxTokens: typeof maxAllowedTokens === "number"
+          ? Math.min(maxTokens ?? maxAllowedTokens, maxAllowedTokens)
+          : maxTokens,
+        temperature,
+        model,
+        provider,
+      });
     }
 
     throw new Error(`Unknown system call: ${method}`);

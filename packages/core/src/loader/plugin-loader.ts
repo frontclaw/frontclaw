@@ -140,6 +140,13 @@ export class PluginLoader {
       );
     }
 
+    if (manifest.runtime !== "docker") {
+      throw new PluginLoadError(
+        pluginPath,
+        "Only docker runtime is supported",
+      );
+    }
+
     // Merge configuration
     const userConfig = this.config.pluginConfigs?.[manifest.id] || {};
     const mergedConfig = {

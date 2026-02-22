@@ -6,6 +6,18 @@
 import { z } from "zod";
 import { PermissionsSchema } from "./permissions.js";
 
+const DockerPluginConfigSchema = z.object({
+  image: z.string().default("oven/bun:1.3.2"),
+  command: z.array(z.string()).min(1).optional(),
+  workdir: z.string().default("/plugin"),
+  network: z.enum(["none", "bridge"]).default("none"),
+  readOnlyRootFs: z.boolean().default(true),
+  memoryMb: z.number().int().positive().optional(),
+  cpuLimit: z.string().optional(),
+  pidsLimit: z.number().int().positive().default(128),
+  startupTimeoutSec: z.number().int().positive().default(120),
+});
+
 /** Plugin manifest schema */
 export const PluginManifestSchema = z.object({
   /** Unique plugin identifier (kebab-case) */
@@ -42,6 +54,12 @@ export const PluginManifestSchema = z.object({
   /** Required permissions */
   permissions: PermissionsSchema,
 
+  /** Plugin runtime target */
+  runtime: z.literal("docker").default("docker"),
+
+  /** Docker runtime configuration */
+  docker: DockerPluginConfigSchema.optional(),
+
   /** Plugin-specific configuration schema (JSON Schema) */
   configSchema: z.record(z.unknown()).optional(),
 
@@ -49,7 +67,7 @@ export const PluginManifestSchema = z.object({
   defaultConfig: z.record(z.unknown()).optional(),
 
   /** Entry point file (relative to plugin root) */
-  main: z.string().default("index.ts"),
+  main: z.string().default("src/plugin.ts"),
 
   /** Minimum Frontclaw version required */
   minFrontclawVersion: z.string().optional(),

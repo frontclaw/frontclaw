@@ -12,7 +12,7 @@ export type UIMessage = {
 
 export type ToolStreamEvent = {
   type: "start" | "result" | "error";
-  toolName: string;
+  toolName?: string;
   args?: Record<string, unknown>;
   source?: "tool" | "skill";
   durationMs?: number;

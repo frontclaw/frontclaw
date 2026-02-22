@@ -16,7 +16,8 @@ import type {
   SocketClient,
 } from "@workspace/plugin-sdk";
 import {
-  PluginWorkerBridge,
+  DockerPluginBridge,
+  type PluginBridge,
   createSysCallHandler,
 } from "../bridge/index.js";
 import { PluginLoader } from "../loader/index.js";
@@ -47,7 +48,7 @@ import type { OrchestratorConfig, PipelineResult } from "./types.js";
  * Manages plugin lifecycle and sequential pipeline execution
  */
 export class Orchestrator {
-  private bridges: Map<string, PluginWorkerBridge> = new Map();
+  private bridges: Map<string, PluginBridge> = new Map();
   private manifests: LoadedPluginManifest[] = [];
   private loader: PluginLoader;
   private sysCallHandler: ReturnType<typeof createSysCallHandler>;
@@ -93,10 +94,15 @@ export class Orchestrator {
 
     for (const manifest of this.manifests) {
       try {
-        const bridge = new PluginWorkerBridge(manifest, this.sysCallHandler, {
+        const bridgeConfig = {
           hookTimeout: this.config.hookTimeout || 5000,
           sysCallTimeout: 30000,
-        });
+        };
+        const bridge: PluginBridge = new DockerPluginBridge(
+          manifest,
+          this.sysCallHandler,
+          bridgeConfig,
+        );
 
         await bridge.start();
         this.bridges.set(manifest.id, bridge);

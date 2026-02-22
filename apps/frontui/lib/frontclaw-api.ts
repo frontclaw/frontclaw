@@ -18,6 +18,20 @@ export type Message = {
   createdAt: string | null;
 };
 
+export type PluginInfo = {
+  id: string;
+  name?: string;
+  version?: string;
+  description?: string;
+  priority?: number;
+  runtime?: string;
+  permissions?: unknown;
+  tags?: string[];
+  manifest?: Record<string, unknown>;
+  enabled: boolean;
+  active: boolean;
+};
+
 export type FrontclawConfig = {
   version?: string;
   project?: {
@@ -198,6 +212,30 @@ export async function saveConfig(config: FrontclawConfig): Promise<void> {
     method: "POST",
     body: JSON.stringify(config),
   });
+}
+
+export async function fetchPlugins(): Promise<PluginInfo[]> {
+  const payload = await requestJson<{
+    success: boolean;
+    plugins: PluginInfo[];
+  }>("/api/v1/plugins");
+
+  return payload.plugins || [];
+}
+
+export async function setPluginEnabled(
+  pluginId: string,
+  enabled: boolean,
+): Promise<{ id: string; enabled: boolean; active: boolean }> {
+  const payload = await requestJson<{
+    success: boolean;
+    plugin: { id: string; enabled: boolean; active: boolean };
+  }>(`/api/v1/plugins/${pluginId}/enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  });
+
+  return payload.plugin;
 }
 
 export async function streamChat(

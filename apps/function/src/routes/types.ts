@@ -1,13 +1,16 @@
 import type { Orchestrator } from "@workspace/core";
 import type { AIClientInstance } from "../services/ai-client";
+import type { RefreshResult } from "../services/runtime-refresh";
 
 export type RouteDeps = {
   orchestrator: Orchestrator;
-  orchestratorReady: Promise<void>;
+  awaitOrchestratorReady: () => Promise<void>;
+  refreshApplicationRuntime: () => Promise<RefreshResult>;
+  isRefreshInProgress: () => boolean;
 };
 
 export type AIRouteDeps = RouteDeps & {
-  aiReady: Promise<void>;
+  awaitAIReady: () => Promise<void>;
   getAIClient: () => AIClientInstance;
   getConfiguredSystemPrompt: () => string;
 };

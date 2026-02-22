@@ -6,21 +6,26 @@ export interface SystemLogger {
   error(message: string, meta?: Record<string, unknown>): void;
 }
 
-/** Database adapter interface */
-export interface DBAdapter {
-  query(
-    sql: string,
-    params?: unknown[],
-  ): Promise<{ rows: unknown[]; rowCount: number }>;
-  getItems(
-    table: string,
-    options?: {
-      where?: Record<string, unknown>;
-      limit?: number;
-      offset?: number;
-    },
-  ): Promise<unknown[]>;
-  getItem(table: string, id: string): Promise<unknown | null>;
+/** LLM adapter interface for plugin syscall access */
+export interface LLMAdapter {
+  chat(options: {
+    messages: Array<{
+      role: "system" | "user" | "assistant";
+      content: string;
+    }>;
+    systemPrompt?: string;
+    maxTokens?: number;
+    temperature?: number;
+    model?: string;
+    provider?: string;
+  }): Promise<{
+    content: string;
+    usage: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    };
+  }>;
 }
 
 /** Orchestrator methods required by syscall handler */
@@ -42,6 +47,6 @@ export interface SysCallOrchestrator {
 
 /** System call handler dependencies */
 export interface SysCallDependencies {
-  db: DBAdapter;
   logger: SystemLogger;
+  llm?: LLMAdapter;
 }

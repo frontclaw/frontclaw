@@ -1,16 +1,16 @@
 "use client";
 
 import { useFetchConversationMessages } from "@/hooks/api";
-import {
-  chatThreadKey,
-  useChatStream,
-  useChatThread,
-} from "@/hooks/chat-stream";
 import { cloneConversation, submitFeedback } from "@/lib/frontclaw-api";
-import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  getStreamState,
+  hydrateConversationMessages,
+  startUniversalStream,
+  subscribeStreamState,
+} from "@/lib/chat-stream-runtime";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChatComposer } from "./chat-composer";
 import { ChatMessage } from "./chat-message";
 import { ChatEmptyState } from "./empty-state";
@@ -18,23 +18,16 @@ import type { ChatWorkspaceProps } from "./types";
 
 export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
   const routedConversationId = conversationId ?? null;
-  const [hasMessages, setHasMessages] = useState(false);
-  const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [clonedConversationId, setClonedConversationId] = useState<
-    string | null
-  >(null);
 
-  const { data: messages, isLoading } = useFetchConversationMessages({
-    conversationId: routedConversationId,
-  });
+  const [clonedConversationId, setClonedConversationId] = useState<string | null>(
+    null,
+  );
+  const [streamConversationId, setStreamConversationId] = useState<string | null>(
+    routedConversationId,
+  );
 
-  const { data } = useChatThread(conversationId || undefined);
-  const mutatePrompt = useChatStream();
-
-  const [composerValue, setComposerValue] = useState("");
-  const [errorText, setErrorText] = useState<string | null>(null);
   const lastElemRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -44,81 +37,50 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
     (shareMode === "message" || shareMode === "conversation") &&
     !!conversationId;
 
+  const { data: loadedMessages, isLoading } = useFetchConversationMessages({
+    conversationId: routedConversationId,
+  });
+
+  const streamState = useSyncExternalStore(
+    (listener) => subscribeStreamState(streamConversationId || routedConversationId, listener),
+    () => getStreamState(streamConversationId || routedConversationId),
+    () => getStreamState(streamConversationId || routedConversationId),
+  );
+
   useEffect(() => {
-    if (!routedConversationId || !messages) return;
+    setStreamConversationId(routedConversationId);
+  }, [routedConversationId]);
 
-    queryClient.setQueryData(
-      chatThreadKey(routedConversationId),
-      (oldData: { messages?: typeof messages } = {}) => {
-        if (!messages.length) {
-          return {
-            ...oldData,
-            conversationId: routedConversationId,
-            messages: [],
-          };
-        }
-
-        if (!oldData.messages || oldData.messages.length === 0) {
-          return {
-            ...oldData,
-            conversationId: routedConversationId,
-            messages,
-          };
-        }
-
-        const loadedById = new Set(messages.map((message) => message.id));
-        const merged = [...messages];
-
-        for (const message of oldData.messages) {
-          if (
-            !loadedById.has(message.id) &&
-            (message.pending || message.error || message.role === "user")
-          ) {
-            merged.push(message);
-          }
-        }
-
-        return {
-          ...oldData,
-          conversationId: routedConversationId,
-          messages: merged,
-        };
-      },
-    );
-  }, [messages, queryClient, routedConversationId]);
+  useEffect(() => {
+    if (!routedConversationId || !loadedMessages) return;
+    hydrateConversationMessages(routedConversationId, loadedMessages);
+  }, [loadedMessages, routedConversationId]);
 
   const visibleMessages = useMemo(() => {
-    if (!data?.messages) return [];
     if (shareMode !== "message" || !sharedMessageId) {
-      return data.messages;
+      return streamState.messages;
     }
 
-    const sharedIndex = data.messages.findIndex(
+    const sharedIndex = streamState.messages.findIndex(
       (message) => message.id === sharedMessageId,
     );
     if (sharedIndex === -1) {
-      return data.messages;
+      return streamState.messages;
     }
-    return data.messages.slice(0, sharedIndex + 1);
-  }, [data?.messages, shareMode, sharedMessageId]);
-
-  useEffect(() => {
-    setHasMessages(!!visibleMessages.length);
-  }, [visibleMessages.length]);
+    return streamState.messages.slice(0, sharedIndex + 1);
+  }, [streamState.messages, shareMode, sharedMessageId]);
 
   const lastMessageSignature = useMemo(() => {
     if (!visibleMessages.length) return "";
     const last = visibleMessages[visibleMessages.length - 1];
     if (!last) return "";
-
     return `${last.id}:${last.content.length}:${last.pending ? "pending" : "done"}`;
   }, [visibleMessages]);
 
   const isNearBottom = () => {
     const container = scrollContainerRef.current;
     if (!container) return false;
-
-    const threshold = 120; // px tolerance
+    const threshold = 120;
     return (
       container.scrollHeight - container.scrollTop - container.clientHeight <
       threshold
@@ -136,39 +98,24 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
     });
 
     observer.observe(container);
-
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
     if (!visibleMessages.length) return;
-
     lastElemRef.current?.scrollIntoView({ behavior: "auto" });
   }, [lastMessageSignature, visibleMessages.length]);
-
-  useEffect(() => {
-    if (data?.error) {
-      setErrorText(data.error);
-      return;
-    }
-
-    if (mutatePrompt.error) {
-      setErrorText(mutatePrompt.error.message);
-      return;
-    }
-
-    setErrorText(null);
-  }, [data?.error, mutatePrompt.error]);
 
   const buildShareUrl = (
     type: "message" | "conversation",
     messageId?: string,
   ) => {
-    if (typeof window === "undefined" || !conversationId) return "";
+    const targetConversationId = streamConversationId || conversationId;
+    if (typeof window === "undefined" || !targetConversationId) return "";
     const params = new URLSearchParams();
     params.set("share", type);
     if (messageId) params.set("messageId", messageId);
-    return `${window.location.origin}/c/${conversationId}?${params.toString()}`;
+    return `${window.location.origin}/c/${targetConversationId}?${params.toString()}`;
   };
 
   const ensureWritableConversationId = async () => {
@@ -187,13 +134,24 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
 
   const sendMessage = async (message: string) => {
     const trimmed = message.trim();
-    if (!trimmed) return;
-    lastElemRef.current?.scrollIntoView();
+    if (!trimmed || streamState.isStreaming) return;
+
     const targetConversationId = await ensureWritableConversationId();
-    mutatePrompt.mutateAsync({
-      message: trimmed,
-      conversationId: targetConversationId || undefined,
-    });
+
+    try {
+      await startUniversalStream({
+        message: trimmed,
+        conversationId: targetConversationId || undefined,
+        onConversationResolved: (resolvedConversationId) => {
+          setStreamConversationId(resolvedConversationId);
+          if (!routedConversationId) {
+            router.replace(`/c/${resolvedConversationId}`);
+          }
+        },
+      });
+    } catch {
+      // state is already set in runtime manager
+    }
   };
 
   const handleCopy = async (text: string) => {
@@ -219,9 +177,10 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
   };
 
   const handleFeedback = async (score: number, messageId?: string) => {
-    if (!conversationId || !messageId) return;
+    const targetConversationId = streamConversationId || conversationId;
+    if (!targetConversationId || !messageId) return;
     await submitFeedback({
-      conversationId,
+      conversationId: targetConversationId,
       messageId,
       score,
       metadata: { source: "frontui" },
@@ -229,13 +188,14 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
   };
 
   const handleRetry = async (assistantMessageId: string) => {
-    const entries = data?.messages ?? [];
-    const index = entries.findIndex((entry) => entry.id === assistantMessageId);
+    const index = streamState.messages.findIndex(
+      (entry) => entry.id === assistantMessageId,
+    );
     if (index <= 0) return;
     for (let i = index - 1; i >= 0; i -= 1) {
-      if (entries?.[i]?.role === "user") {
-        const msg = entries?.[i]?.content as string;
-        await sendMessage(msg);
+      const entry = streamState.messages[i];
+      if (entry?.role === "user") {
+        await sendMessage(entry.content);
         return;
       }
     }
@@ -248,7 +208,7 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
           ref={scrollContainerRef}
           className="flex-1 overflow-y-auto px-4 py-5 md:px-7"
         >
-          {isLoading ? (
+          {isLoading && !streamState.messages.length ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--frontui-muted)]">
               <Loader2 className="mr-2 animate-spin" size={16} /> Loading
               messages...
@@ -263,7 +223,7 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
                 <ChatMessage
                   key={entry.id}
                   message={entry}
-                  disableActions={!!entry.pending}
+                  disableActions={!!entry.pending || streamState.isStreaming}
                   onCopy={
                     entry.role === "assistant"
                       ? () => handleCopy(entry.content)
@@ -281,7 +241,7 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
                   }
                   onShareMessage={() => handleShare("message", entry.id)}
                   onShareConversation={
-                    conversationId
+                    streamConversationId || conversationId
                       ? () => handleShare("conversation")
                       : undefined
                   }
@@ -293,14 +253,12 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
                 />
               ))}
 
-              {/* Last element */}
               {visibleMessages.length > 0 && <div ref={lastElemRef} />}
             </div>
           )}
         </div>
       </div>
 
-      {/* Prompt container */}
       <div className="relative w-full">
         {!true ? (
           <button
@@ -316,14 +274,14 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
         ) : null}
 
         <ChatComposer
-          defaultValue={composerValue}
+          defaultValue=""
           onSend={async (prompt) => {
             const message = prompt.trim();
             if (!message) return;
             await sendMessage(message);
           }}
-          sending={mutatePrompt.isPending}
-          errorText={errorText}
+          sending={streamState.isStreaming}
+          errorText={streamState.errorText}
         />
       </div>
     </section>

@@ -1,5 +1,13 @@
 export type LogsMode = "debug" | "production";
 type LogLevel = "debug" | "info" | "warn" | "error";
+type PluginLogRecord = {
+  level: LogLevel;
+  message: string;
+  meta?: Record<string, unknown>;
+  timestamp: number;
+};
+
+const pluginLogSubscribers = new Set<(record: PluginLogRecord) => void>();
 
 function resolveLogsMode(): LogsMode {
   const value = (process.env.LOGS || "production").trim().toLowerCase();
@@ -44,21 +52,64 @@ export function createScopedLogger(scope: string) {
   };
 }
 
+export function subscribePluginLogs(
+  subscriber: (record: PluginLogRecord) => void,
+): () => void {
+  pluginLogSubscribers.add(subscriber);
+  return () => {
+    pluginLogSubscribers.delete(subscriber);
+  };
+}
+
+function emitPluginLog(record: PluginLogRecord): void {
+  for (const subscriber of pluginLogSubscribers) {
+    try {
+      subscriber(record);
+    } catch {
+      // Never let subscriber errors break logging flow.
+    }
+  }
+}
+
 export function createPluginSystemLogger() {
   const logger = createScopedLogger("plugins");
   return {
     debug(message: string, meta?: Record<string, unknown>) {
       logger.debug(message, meta);
+      emitPluginLog({
+        level: "debug",
+        message,
+        meta,
+        timestamp: Date.now(),
+      });
     },
     info(message: string, meta?: Record<string, unknown>) {
       // Plugin info logs are very verbose; keep them in debug only.
       logger.info(message, meta);
+      emitPluginLog({
+        level: "info",
+        message,
+        meta,
+        timestamp: Date.now(),
+      });
     },
     warn(message: string, meta?: Record<string, unknown>) {
       logger.warn(message, meta);
+      emitPluginLog({
+        level: "warn",
+        message,
+        meta,
+        timestamp: Date.now(),
+      });
     },
     error(message: string, meta?: Record<string, unknown>) {
       logger.error(message, meta);
+      emitPluginLog({
+        level: "error",
+        message,
+        meta,
+        timestamp: Date.now(),
+      });
     },
   };
 }

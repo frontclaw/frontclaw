@@ -12,7 +12,10 @@ import type { AIRouteDeps, RouteDeps } from "./types";
 export function registerRoutes(
   app: Hono,
   deps: RouteDeps &
-    Pick<AIRouteDeps, "aiReady" | "getAIClient" | "getConfiguredSystemPrompt">,
+    Pick<
+      AIRouteDeps,
+      "awaitAIReady" | "getAIClient" | "getConfiguredSystemPrompt"
+    >,
 ) {
   registerSystemRoutes(app, deps);
   registerPluginRoutes(app, deps);

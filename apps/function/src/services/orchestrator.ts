@@ -4,8 +4,8 @@ import {
   SecureMemoryService,
   type OrchestratorConfig,
 } from "@workspace/core";
-import { primaryActions as pDB } from "@workspace/db";
 import path from "node:path";
+import { getAIClient } from "./ai-client";
 import { createPluginSystemLogger, createScopedLogger } from "../lib/logging";
 
 function parseKey(value: string): Buffer {
@@ -47,43 +47,71 @@ const orchestratorConfig: OrchestratorConfig = {
     disabledPlugins: [],
   },
   dependencies: {
-    db: {
-      async query(sql, params) {
-        // TODO: Implement raw SQL query through Drizzle
-        appLogger.debug("DB query", { sql, params });
-        return { rows: [], rowCount: 0 };
-      },
-      async getItems(table, options) {
-        if (table === "fc_items" || table === "items") {
-          const items = await pDB.getItems();
-          return items as unknown[];
-        }
-        return [];
-      },
-      async getItem(table, id) {
-        if (table === "fc_items" || table === "items") {
-          const item = await pDB.getItem(id);
-          return item ? (Array.isArray(item) ? item[0] : item) : null;
-        }
-        return null;
+    logger: pluginLogger,
+    llm: {
+      async chat(options) {
+        const aiClient = getAIClient();
+        const result = await aiClient.chat({
+          messages: options.messages,
+          systemPrompt: options.systemPrompt,
+          maxTokens: options.maxTokens,
+          temperature: options.temperature,
+        });
+        return {
+          content: result.content,
+          usage: result.usage,
+        };
       },
     },
-    logger: pluginLogger,
   },
   memoryService: secureMemoryService,
   hookTimeout: 5000,
 };
 
 export const orchestrator = new Orchestrator(orchestratorConfig);
+let orchestratorReadyPromise: Promise<void> | null = null;
+let orchestratorRefreshPromise: Promise<void> | null = null;
 
-export const orchestratorReady = orchestrator
-  .start()
-  .then(() => {
-    appLogger.info("Frontclaw Orchestrator started successfully", undefined, {
-      essential: true,
+function startOrchestrator(): Promise<void> {
+  return orchestrator
+    .start()
+    .then(() => {
+      appLogger.info("Frontclaw Orchestrator started successfully", undefined, {
+        essential: true,
+      });
+    })
+    .catch((error) => {
+      appLogger.error("Failed to start Frontclaw Orchestrator", error);
+      throw error;
     });
-  })
-  .catch((error) => {
-    appLogger.error("Failed to start Frontclaw Orchestrator", error);
-    throw error;
+}
+
+function ensureOrchestratorReadyPromise(): Promise<void> {
+  if (!orchestratorReadyPromise) {
+    orchestratorReadyPromise = startOrchestrator();
+  }
+  return orchestratorReadyPromise;
+}
+
+export function waitForOrchestratorReady(): Promise<void> {
+  return ensureOrchestratorReadyPromise();
+}
+
+export async function refreshOrchestrator(): Promise<void> {
+  if (orchestratorRefreshPromise) {
+    return orchestratorRefreshPromise;
+  }
+
+  orchestratorRefreshPromise = (async () => {
+    await orchestrator.stop();
+    const nextReady = startOrchestrator();
+    orchestratorReadyPromise = nextReady;
+    await nextReady;
+  })().finally(() => {
+    orchestratorRefreshPromise = null;
   });
+
+  return orchestratorRefreshPromise;
+}
+
+ensureOrchestratorReadyPromise();

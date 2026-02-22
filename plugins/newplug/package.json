@@ -1,0 +1,13 @@
+{
+  "name": "@frontclaw/plugin-newplug",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@workspace/plugin-sdk": "workspace:*"
+  },
+  "scripts": {
+    "dev": "bun src/plugin.ts",
+    "start": "bun src/plugin.ts"
+  }
+}

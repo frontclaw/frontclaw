@@ -17,8 +17,10 @@ let aiClient = createAIClient({
   debug: process.env.NODE_ENV === "development",
 });
 let configuredSystemPrompt = "";
+let aiReadyPromise: Promise<void> | null = null;
+let aiReloadPromise: Promise<void> | null = null;
 
-export const aiReady = (async () => {
+async function initializeAIClient(): Promise<void> {
   const configPath = getConfigPath();
   if (!configPath) {
     throw new Error(
@@ -45,7 +47,35 @@ export const aiReady = (async () => {
     model,
     debug: process.env.NODE_ENV === "development",
   });
-})();
+}
+
+function ensureAIReadyPromise(): Promise<void> {
+  if (!aiReadyPromise) {
+    aiReadyPromise = initializeAIClient();
+  }
+  return aiReadyPromise;
+}
+
+export function waitForAIReady(): Promise<void> {
+  return ensureAIReadyPromise();
+}
+
+export async function reloadAIClient(): Promise<void> {
+  if (aiReloadPromise) {
+    return aiReloadPromise;
+  }
+
+  aiReloadPromise = (async () => {
+    const nextReady = initializeAIClient();
+    aiReadyPromise = nextReady;
+    await nextReady;
+  })()
+    .finally(() => {
+      aiReloadPromise = null;
+    });
+
+  return aiReloadPromise;
+}
 
 export function getAIClient(): AIClientInstance {
   return aiClient;
@@ -100,3 +130,5 @@ function createProviderModel(config: Chat): NonNullable<AIClientConfig["model"]>
       throw new Error(`Unsupported chat provider: ${config.provider}`);
   }
 }
+
+ensureAIReadyPromise();

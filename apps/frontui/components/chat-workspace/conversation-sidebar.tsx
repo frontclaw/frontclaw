@@ -29,6 +29,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { conversationTitle, groupConversations } from "./utils";
 
@@ -41,10 +42,13 @@ export function ConversationSidebar() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
 
   const { data: conversations, isLoading: loading } = useFetchConversations();
   const deleteConversation = useDeleteConversation({
     onSuccess: () => {
+      router.push("/");
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
       toast.success("Conversation deleted", {});
     },
     onError: () => {
@@ -59,6 +63,7 @@ export function ConversationSidebar() {
           const { updateConversationTitle } =
             await import("@/lib/frontclaw-api");
           await updateConversationTitle(conversationId, editValue.trim());
+          await queryClient.invalidateQueries({ queryKey: ["conversations"] });
         } catch (error) {
           console.error("Failed to rename conversation:", error);
         }

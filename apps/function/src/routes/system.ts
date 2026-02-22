@@ -2,7 +2,12 @@ import type { Hono } from "hono";
 import type { RouteDeps } from "./types";
 
 export function registerSystemRoutes(app: Hono, deps: RouteDeps) {
-  const { orchestrator } = deps;
+  const {
+    orchestrator,
+    refreshApplicationRuntime,
+    isRefreshInProgress,
+    awaitOrchestratorReady,
+  } = deps;
 
   app.get("/", (c) => {
     return c.json({
@@ -15,9 +20,11 @@ export function registerSystemRoutes(app: Hono, deps: RouteDeps) {
         name: m.name,
         version: m.version,
         priority: m.priority,
+        runtime: m.runtime,
       })),
       apis: {
         health: "/api/v1/health",
+        refresh: "/api/v1/refresh",
         plugins: "/api/v1/plugins",
         skills: "/api/v1/skills",
         memory: "/api/v1/memory",
@@ -41,6 +48,37 @@ export function registerSystemRoutes(app: Hono, deps: RouteDeps) {
       message: "FrontClaw API is healthy!",
       orchestrator: orchestrator.running ? "running" : "stopped",
       plugins: orchestrator.getManifests().length,
+      refreshing: isRefreshInProgress(),
     });
+  });
+
+  app.post("/api/v1/refresh", async (c) => {
+    const adminToken = process.env.FRONTCLAW_ADMIN_TOKEN;
+    if (adminToken) {
+      const provided = c.req.header("x-admin-token");
+      if (provided !== adminToken) {
+        return c.json({ success: false, message: "Unauthorized" }, 401);
+      }
+    }
+
+    try {
+      await awaitOrchestratorReady();
+      const result = await refreshApplicationRuntime();
+
+      return c.json({
+        success: true,
+        message: "Application runtime refreshed",
+        ...result,
+      });
+    } catch (error) {
+      return c.json(
+        {
+          success: false,
+          message: "Failed to refresh application runtime",
+          error: (error as Error).message,
+        },
+        500,
+      );
+    }
   });
 }

@@ -5,19 +5,28 @@
 
 import { z } from "zod";
 
-/** Database access permissions */
-export const DBPermissionSchema = z.object({
-  tables: z.array(z.string()),
-  access: z.enum(["read-only", "read-write"]),
-});
-export type DBPermission = z.infer<typeof DBPermissionSchema>;
-
 /** Network/fetch permissions */
 export const NetworkPermissionSchema = z.object({
-  allowed_domains: z.array(z.string()),
+  allowed_domains: z.array(z.string()).optional().default([]),
   allow_all: z.boolean().optional().default(false),
+  allowed_http_endpoints: z.array(z.string()).optional().default([]),
 });
 export type NetworkPermission = z.infer<typeof NetworkPermissionSchema>;
+
+/** Filesystem access permissions (plugin-local paths) */
+export const FSPermissionSchema = z.object({
+  read: z.array(z.string()).optional().default([]),
+  write: z.array(z.string()).optional().default([]),
+});
+export type FSPermission = z.infer<typeof FSPermissionSchema>;
+
+/** Plugin-local state permissions */
+export const StatePermissionSchema = z.object({
+  enabled: z.boolean().optional().default(true),
+  read: z.boolean().optional().default(true),
+  write: z.boolean().optional().default(true),
+});
+export type StatePermission = z.infer<typeof StatePermissionSchema>;
 
 /** LLM interaction permissions */
 export const LLMPermissionSchema = z.object({
@@ -26,6 +35,9 @@ export const LLMPermissionSchema = z.object({
   can_modify_system_message: z.boolean().optional().default(false),
   can_modify_response: z.boolean().optional().default(false),
   max_tokens_per_request: z.number().optional(),
+  can_call_provider: z.boolean().optional().default(false),
+  allowed_providers: z.array(z.string()).optional().default([]),
+  allowed_models: z.array(z.string()).optional().default([]),
 });
 export type LLMPermission = z.infer<typeof LLMPermissionSchema>;
 
@@ -56,8 +68,9 @@ export type LogPermission = z.infer<typeof LogPermissionSchema>;
 
 /** Complete permissions object */
 export const PermissionsSchema = z.object({
-  db: DBPermissionSchema.optional(),
+  state: StatePermissionSchema.optional().default({ enabled: true }),
   network: NetworkPermissionSchema.optional(),
+  fs: FSPermissionSchema.optional(),
   llm: LLMPermissionSchema.optional(),
   api: APIPermissionSchema.optional(),
   socket: SocketPermissionSchema.optional(),

@@ -2,6 +2,13 @@ import type { ToolDefinition } from "@workspace/core";
 import { primaryActions as pDB } from "@workspace/db";
 import type { Hono } from "hono";
 import { createScopedLogger } from "../lib/logging";
+import {
+  appendChatStreamEvent,
+  closeChatStreamSession,
+  createChatStreamSession,
+  createChatStreamSSE,
+  hasChatStreamSession,
+} from "../services/chat-stream-sessions";
 import type { AIRouteDeps } from "./types";
 
 type ChatRequestBody = {
@@ -51,6 +58,17 @@ type ExecutedToolContext = {
   args: Record<string, unknown>;
   source: "tool" | "skill";
   result: unknown;
+};
+
+type PersistedToolEvent = {
+  type: "start" | "result" | "error";
+  toolName: string;
+  args?: Record<string, unknown>;
+  source?: "tool" | "skill";
+  durationMs?: number;
+  resultPreview?: string;
+  error?: string;
+  startedAt?: number;
 };
 
 class ToolTerminalResponseError extends Error {
@@ -276,12 +294,48 @@ function buildToolContext(
 export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
   const {
     orchestrator,
-    orchestratorReady,
-    aiReady,
+    awaitOrchestratorReady,
+    awaitAIReady,
     getAIClient,
     getConfiguredSystemPrompt,
   } = deps;
   const chatLogger = createScopedLogger("chat");
+
+  app.get("/api/v1/chat/streams/:streamId", async (c) => {
+    try {
+      const streamId = c.req.param("streamId");
+      if (!hasChatStreamSession(streamId)) {
+        return c.json(
+          { success: false, message: "Stream session not found" },
+          404,
+        );
+      }
+
+      const cursorRaw = c.req.query("cursor");
+      const cursor = cursorRaw ? Number.parseInt(cursorRaw, 10) : 0;
+
+      return new Response(
+        createChatStreamSSE(streamId, Number.isNaN(cursor) ? 0 : cursor),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+          },
+        },
+      );
+    } catch (error) {
+      return c.json(
+        {
+          success: false,
+          message: "Failed to resume stream",
+          error: (error as Error).message,
+        },
+        500,
+      );
+    }
+  });
 
   app.get("/api/v1/conversations", async (c) => {
     try {
@@ -582,8 +636,8 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
 
   app.get("/api/v1/conversations/:conversationId/context", async (c) => {
     try {
-      await orchestratorReady;
-      await aiReady;
+      await awaitOrchestratorReady();
+      await awaitAIReady();
 
       const conversationId = c.req.param("conversationId");
       const conversation = await pDB.getConversation(conversationId);
@@ -703,8 +757,8 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
   app.post("/api/v1/chat", async (c) => {
     try {
       chatLogger.info("Incoming chat request", undefined, { essential: true });
-      await orchestratorReady;
-      await aiReady;
+      await awaitOrchestratorReady();
+      await awaitAIReady();
       chatLogger.debug("Dependencies ready");
 
       const body = (await c.req.json()) as Partial<ChatRequestBody>;
@@ -895,15 +949,19 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
       const createToolExecutor = (
         emitToolEvent?: (event: string, payload: unknown) => void,
         onToolCompleted?: (tool: ExecutedToolContext) => void,
+        onToolEvent?: (event: PersistedToolEvent) => void,
       ) => {
         return async (toolName: string, args: Record<string, unknown>) => {
           chatLogger.debug("Tool execution started", { toolName, args });
           const startedAt = Date.now();
-          emitToolEvent?.("tool_start", {
+          const startEvent: PersistedToolEvent = {
+            type: "start",
             toolName,
             args,
             startedAt,
-          });
+          };
+          onToolEvent?.(startEvent);
+          emitToolEvent?.("tool_start", startEvent);
 
           try {
             const skillResult = await orchestrator.executeSkill(toolName, args);
@@ -920,7 +978,8 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
                 source: "skill",
                 result: routing.llmPayload,
               });
-              emitToolEvent?.("tool_result", {
+              const resultEvent: PersistedToolEvent = {
+                type: "result",
                 toolName,
                 source: "skill",
                 durationMs,
@@ -929,7 +988,9 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
                     ? routing.terminalResponse
                     : routing.llmPayload,
                 ),
-              });
+              };
+              onToolEvent?.(resultEvent);
+              emitToolEvent?.("tool_result", resultEvent);
               if (routing.mode === "end_request") {
                 throw new ToolTerminalResponseError(
                   routing.terminalResponse || "",
@@ -959,7 +1020,8 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
               source: "tool",
               result: routing.llmPayload,
             });
-            emitToolEvent?.("tool_result", {
+            const resultEvent: PersistedToolEvent = {
+              type: "result",
               toolName,
               source: "tool",
               durationMs,
@@ -968,7 +1030,9 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
                   ? routing.terminalResponse
                   : routing.llmPayload,
               ),
-            });
+            };
+            onToolEvent?.(resultEvent);
+            emitToolEvent?.("tool_result", resultEvent);
             if (routing.mode === "end_request") {
               throw new ToolTerminalResponseError(
                 routing.terminalResponse || "",
@@ -985,11 +1049,14 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
                 durationMs,
                 error: (error as Error).message,
               });
-              emitToolEvent?.("tool_error", {
+              const errorEvent: PersistedToolEvent = {
+                type: "error",
                 toolName,
                 durationMs,
                 error: (error as Error).message,
-              });
+              };
+              onToolEvent?.(errorEvent);
+              emitToolEvent?.("tool_error", errorEvent);
             }
             throw error;
           }
@@ -1003,150 +1070,146 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
 
       if (wantsStream(c.req.header("accept"), body as ChatRequestBody)) {
         chatLogger.debug("Using streaming response mode");
-        const encoder = new TextEncoder();
+        const streamId = createChatStreamSession();
+        const sendEvent = (event: string, payload: unknown) => {
+          appendChatStreamEvent(streamId, event, payload);
+        };
 
-        const stream = new ReadableStream<Uint8Array>({
-          start: async (controller) => {
-            let isClosed = false;
-            const closeOnce = () => {
-              if (isClosed) return;
-              isClosed = true;
-              try {
-                controller.close();
-              } catch {
-                // Ignore close errors (already closed/disconnected)
-              }
-            };
-            const sendEvent = (event: string, payload: unknown) => {
-              if (isClosed) return false;
-              try {
-                controller.enqueue(encoder.encode(toSSEChunk(event, payload)));
-                return true;
-              } catch {
-                isClosed = true;
-                return false;
-              }
-            };
+        void (async () => {
+          const persistedToolEvents: PersistedToolEvent[] = [];
+          try {
+            sendEvent("meta", {
+              streamId,
+              conversationId: conversation.id,
+              userMessageId: userMessage?.id,
+            });
 
-            try {
-              sendEvent("meta", {
-                conversationId: conversation.id,
-                userMessageId: userMessage?.id,
-              });
-
-              const aiClient = getAIClient();
-              const executedTools: ExecutedToolContext[] = [];
-              const streamToolExecutor = createToolExecutor(sendEvent, (tool) => {
+            const aiClient = getAIClient();
+            const executedTools: ExecutedToolContext[] = [];
+            const streamToolExecutor = createToolExecutor(
+              sendEvent,
+              (tool) => {
                 executedTools.push(tool);
-              });
-              const iterator = aiClient
-                .chatStream({
-                  messages: llmMessages,
-                  tools: mergedTools,
-                  toolChoice: mergedTools ? "auto" : "none",
-                  toolExecutor: streamToolExecutor,
-                })
-                [Symbol.asyncIterator]();
+              },
+              (event) => {
+                persistedToolEvents.push(event);
+              },
+            );
+            const iterator = aiClient
+              .chatStream({
+                messages: llmMessages,
+                tools: mergedTools,
+                toolChoice: mergedTools ? "auto" : "none",
+                toolExecutor: streamToolExecutor,
+              })
+              [Symbol.asyncIterator]();
 
-              let rawAssistantResponse = "";
-              let toolCalls: Array<{
-                id: string;
-                name: string;
-                arguments: Record<string, unknown>;
-              }> = [];
+            let rawAssistantResponse = "";
+            let toolCalls: Array<{
+              id: string;
+              name: string;
+              arguments: Record<string, unknown>;
+            }> = [];
 
-              while (true) {
-                const next = await iterator.next();
+            while (true) {
+              const next = await iterator.next();
 
-                if (next.done) {
-                  rawAssistantResponse = next.value.content || rawAssistantResponse;
-                  toolCalls = next.value.toolCalls;
-                  break;
-                }
-
-                if (next.value.textDelta) {
-                  rawAssistantResponse += next.value.textDelta;
-                  if (!sendEvent("delta", { text: next.value.textDelta })) {
-                    break;
-                  }
-                }
+              if (next.done) {
+                rawAssistantResponse = next.value.content || rawAssistantResponse;
+                toolCalls = next.value.toolCalls;
+                break;
               }
 
-              const finalResponse =
-                await orchestrator.afterLLMCall(
-                  rawAssistantResponse.trim().length === 0 && executedTools.length > 0
-                    ? await fallbackFromToolResults(aiClient, llmMessages, executedTools)
-                    : rawAssistantResponse,
-                );
-              if (rawAssistantResponse.trim().length === 0 && executedTools.length > 0) {
-                chatLogger.info(
-                  "Applied fallback synthesis after empty post-tool stream response",
-                  { executedTools: executedTools.length },
-                  { essential: true },
-                );
+              if (next.value.textDelta) {
+                rawAssistantResponse += next.value.textDelta;
+                sendEvent("delta", { text: next.value.textDelta });
               }
+            }
 
+            const finalResponse =
+              await orchestrator.afterLLMCall(
+                rawAssistantResponse.trim().length === 0 && executedTools.length > 0
+                  ? await fallbackFromToolResults(aiClient, llmMessages, executedTools)
+                  : rawAssistantResponse,
+              );
+            if (rawAssistantResponse.trim().length === 0 && executedTools.length > 0) {
+              chatLogger.info(
+                "Applied fallback synthesis after empty post-tool stream response",
+                { executedTools: executedTools.length },
+                { essential: true },
+              );
+            }
+
+            const assistantMetadata: Record<string, unknown> = {};
+            if (toolCalls.length > 0) {
+              assistantMetadata.toolCalls = toolCalls;
+            }
+            if (persistedToolEvents.length > 0) {
+              assistantMetadata.toolEvents = persistedToolEvents;
+            }
+            const assistantMessage = await pDB.createMessage({
+              conversationId: conversation.id,
+              role: "assistant",
+              content: finalResponse,
+              metadata: assistantMetadata,
+            });
+            await pDB.touchConversation(conversation.id);
+
+            sendEvent("done", {
+              conversationId: conversation.id,
+              userMessageId: userMessage?.id,
+              assistantMessageId: assistantMessage?.id,
+              response: finalResponse,
+              toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+            });
+            chatLogger.info(
+              "Streaming chat completed",
+              { conversationId: conversation.id, toolCalls: toolCalls.length },
+              { essential: true },
+            );
+          } catch (error) {
+            if (error instanceof ToolTerminalResponseError) {
+              const finalResponse = await orchestrator.afterLLMCall(
+                error.terminalResponse,
+              );
               const assistantMessage = await pDB.createMessage({
                 conversationId: conversation.id,
                 role: "assistant",
                 content: finalResponse,
-                metadata: toolCalls.length > 0 ? { toolCalls } : {},
+                metadata: {
+                  terminalByTool: error.toolName,
+                  terminalSource: error.source,
+                  ...(persistedToolEvents.length > 0
+                    ? { toolEvents: persistedToolEvents }
+                    : {}),
+                },
               });
               await pDB.touchConversation(conversation.id);
-
               sendEvent("done", {
                 conversationId: conversation.id,
                 userMessageId: userMessage?.id,
                 assistantMessageId: assistantMessage?.id,
                 response: finalResponse,
-                toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
               });
               chatLogger.info(
-                "Streaming chat completed",
-                { conversationId: conversation.id, toolCalls: toolCalls.length },
+                "Request ended directly by tool response",
+                { toolName: error.toolName, source: error.source },
                 { essential: true },
               );
-              closeOnce();
-            } catch (error) {
-              if (error instanceof ToolTerminalResponseError) {
-                const finalResponse = await orchestrator.afterLLMCall(
-                  error.terminalResponse,
-                );
-                const assistantMessage = await pDB.createMessage({
-                  conversationId: conversation.id,
-                  role: "assistant",
-                  content: finalResponse,
-                  metadata: {
-                    terminalByTool: error.toolName,
-                    terminalSource: error.source,
-                  },
-                });
-                await pDB.touchConversation(conversation.id);
-                sendEvent("done", {
-                  conversationId: conversation.id,
-                  userMessageId: userMessage?.id,
-                  assistantMessageId: assistantMessage?.id,
-                  response: finalResponse,
-                });
-                chatLogger.info(
-                  "Request ended directly by tool response",
-                  { toolName: error.toolName, source: error.source },
-                  { essential: true },
-                );
-                closeOnce();
-                return;
-              }
-              chatLogger.error("Streaming chat failed", error);
-              sendEvent("error", {
-                message: "Chat streaming failed",
-                error: (error as Error).message,
-              });
-              closeOnce();
+              closeChatStreamSession(streamId);
+              return;
             }
-          },
-        });
+            chatLogger.error("Streaming chat failed", error);
+            sendEvent("error", {
+              message: "Chat streaming failed",
+              error: (error as Error).message,
+            });
+          } finally {
+            closeChatStreamSession(streamId);
+          }
+        })();
 
-        return new Response(stream, {
+        return new Response(createChatStreamSSE(streamId), {
           status: 200,
           headers: {
             "Content-Type": "text/event-stream; charset=utf-8",
@@ -1158,9 +1221,16 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
 
       const aiClient = getAIClient();
       const executedTools: ExecutedToolContext[] = [];
-      const toolExecutor = createToolExecutor(undefined, (tool) => {
-        executedTools.push(tool);
-      });
+      const persistedToolEvents: PersistedToolEvent[] = [];
+      const toolExecutor = createToolExecutor(
+        undefined,
+        (tool) => {
+          executedTools.push(tool);
+        },
+        (event) => {
+          persistedToolEvents.push(event);
+        },
+      );
       let aiResult;
       try {
         aiResult = await aiClient.chat({
@@ -1181,6 +1251,9 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
             metadata: {
               terminalByTool: error.toolName,
               terminalSource: error.source,
+              ...(persistedToolEvents.length > 0
+                ? { toolEvents: persistedToolEvents }
+                : {}),
             },
           });
           await pDB.touchConversation(conversation.id);
@@ -1217,14 +1290,18 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
         );
       }
       const finalResponse = await orchestrator.afterLLMCall(rawFinalContent);
+      const assistantMetadata: Record<string, unknown> = {};
+      if (aiResult.toolCalls.length > 0) {
+        assistantMetadata.toolCalls = aiResult.toolCalls;
+      }
+      if (persistedToolEvents.length > 0) {
+        assistantMetadata.toolEvents = persistedToolEvents;
+      }
       const assistantMessage = await pDB.createMessage({
         conversationId: conversation.id,
         role: "assistant",
         content: finalResponse,
-        metadata:
-          aiResult.toolCalls.length > 0
-            ? { toolCalls: aiResult.toolCalls }
-            : {},
+        metadata: assistantMetadata,
       });
       await pDB.touchConversation(conversation.id);
 
@@ -1256,8 +1333,8 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
 
   app.get("/api/v1/search", async (c) => {
     try {
-      await orchestratorReady;
-      await aiReady;
+      await awaitOrchestratorReady();
+      await awaitAIReady();
       const { q, limit } = c.req.query();
 
       if (!q) {

@@ -1,0 +1,95 @@
+{
+  "id": "sandbox-shield-lab",
+  "name": "Sandbox Shield Lab",
+  "version": "1.0.0",
+  "description": "Test plugin for capabilities and security shields (tools, skills, prompt guard, HTTP routes)",
+  "author": {
+    "name": "Frontclaw Team"
+  },
+  "priority": 20,
+  "runtime": "docker",
+  "docker": {
+    "image": "oven/bun:1.3.2",
+    "command": [
+      "bun",
+      "dist/plugin.js"
+    ],
+    "workdir": "/plugin",
+    "network": "bridge",
+    "readOnlyRootFs": true,
+    "pidsLimit": 128,
+    "memoryMb": 256,
+    "startupTimeoutSec": 120
+  },
+  "permissions": {
+    "network": {
+      "allowed_http_endpoints": [
+        "GET https://httpbin.org/*",
+        "GET https://api.duckduckgo.com/*",
+        "GET https://example.com/*",
+        "GET http://192.168.0.120:1234/v1/*",
+        "POST http://192.168.0.120:1234/v1/*"
+      ],
+      "allow_all": false
+    },
+    "state": {
+      "enabled": true,
+      "read": true,
+      "write": true
+    },
+    "fs": {
+      "read": [
+        "logs/**"
+      ],
+      "write": [
+        "logs/**"
+      ]
+    },
+    "llm": {
+      "can_intercept_task": true,
+      "can_modify_prompt": true,
+      "can_call_provider": true,
+      "allowed_providers": [
+        "*"
+      ],
+      "allowed_models": [
+        "*"
+      ],
+      "max_tokens_per_request": 512
+    },
+    "api": {
+      "routes": [
+        "GET /shield/status",
+        "GET /shield/events"
+      ]
+    },
+    "skills": [
+      "shield_summarize",
+      "shield_audit"
+    ],
+    "memory": {
+      "read": [
+        "sandbox-shield-lab:*"
+      ],
+      "write": [
+        "sandbox-shield-lab:*"
+      ]
+    },
+    "log": {
+      "enabled": false,
+      "levels": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ]
+    }
+  },
+  "main": "dist/plugin.js",
+  "tags": [
+    "security",
+    "testing",
+    "sandbox"
+  ],
+  "enabled": false
+}

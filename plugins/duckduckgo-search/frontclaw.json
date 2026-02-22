@@ -7,18 +7,43 @@
     "name": "Frontclaw Team"
   },
   "priority": 40,
+  "runtime": "docker",
+  "docker": {
+    "image": "oven/bun:1.3.2",
+    "command": [
+      "bun",
+      "index.ts"
+    ],
+    "workdir": "/plugin",
+    "network": "none",
+    "readOnlyRootFs": true
+  },
   "permissions": {
     "network": {
-      "allowed_domains": ["api.duckduckgo.com"],
+      "allowed_domains": [
+        "api.duckduckgo.com"
+      ],
       "allow_all": false
     },
-    "skills": ["web_search"],
+    "skills": [
+      "web_search"
+    ],
     "log": {
       "enabled": true,
-      "levels": ["debug", "info", "warn", "error"]
+      "levels": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ]
     }
   },
   "main": "index.ts",
-  "tags": ["search", "duckduckgo", "tool", "skill"],
-  "enabled": true
+  "tags": [
+    "search",
+    "duckduckgo",
+    "tool",
+    "skill"
+  ],
+  "enabled": false
 }

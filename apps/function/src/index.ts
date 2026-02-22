@@ -2,24 +2,33 @@ import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { registerRoutes } from "./routes";
 import {
-  aiReady,
+  waitForAIReady,
   getAIClient,
   getConfiguredSystemPrompt,
 } from "./services/ai-client";
-import { orchestrator, orchestratorReady } from "./services/orchestrator";
+import {
+  orchestrator,
+  waitForOrchestratorReady,
+} from "./services/orchestrator";
+import {
+  isRefreshInProgress,
+  refreshApplicationRuntime,
+} from "./services/runtime-refresh";
 
 const app = new Hono();
 app.use(logger());
 
 registerRoutes(app, {
   orchestrator,
-  orchestratorReady,
-  aiReady,
+  awaitOrchestratorReady: waitForOrchestratorReady,
+  awaitAIReady: waitForAIReady,
+  refreshApplicationRuntime,
+  isRefreshInProgress,
   getAIClient,
   getConfiguredSystemPrompt,
 });
 
-aiReady
+waitForAIReady()
   .then(() => {
     console.log("AI client initialized from frontclaw.json");
   })

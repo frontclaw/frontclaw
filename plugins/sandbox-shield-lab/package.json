@@ -1,0 +1,14 @@
+{
+  "name": "@frontclaw/plugin-sandbox-shield-lab",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@workspace/plugin-sdk": "workspace:*"
+  },
+  "scripts": {
+    "build": "bun build src/plugin.ts --outfile dist/plugin.js --target bun --packages=bundle --minify",
+    "dev": "bun --watch src/plugin.ts",
+    "start": "bun dist/plugin.js"
+  }
+}
