@@ -2,94 +2,60 @@
 
 import { cn } from "@workspace/ui/lib/utils";
 import React from "react";
-import ReactMarkdown from "react-markdown";
-import ShikiHighlighter from "react-shiki";
+import ReactMarkdown, { Components } from "react-markdown";
+import { rehypeInlineCodeProperty } from "react-shiki/web";
 import remarkGfm from "remark-gfm";
+import { CodeHighlight } from "./code-highlight";
+
+import "katex/dist/katex.min.css";
 
 type MessageMarkdownProps = {
   content: string;
-  streaming?: boolean;
 };
 
+const remarkPlugins = [remarkGfm];
+const rehypePlugins = [rehypeInlineCodeProperty];
+
+const markdownComponents = {
+  p: ({ children }) => <p className="frontui-md-p">{children}</p>,
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="frontui-md-a">
+      {children}
+    </a>
+  ),
+  strong: ({ children }) => (
+    <strong className="frontui-md-strong">{children}</strong>
+  ),
+  em: ({ children }) => <em className="frontui-md-em">{children}</em>,
+  code: CodeHighlight,
+  pre: ({ children }) => <div className="frontui-md-pre">{children}</div>,
+  ul: ({ children }) => <ul className="frontui-md-ul">{children}</ul>,
+  ol: ({ children }) => <ol className="frontui-md-ol">{children}</ol>,
+  li: ({ children }) => <li className="frontui-md-li">{children}</li>,
+  blockquote: ({ children }) => (
+    <blockquote className="frontui-md-blockquote">{children}</blockquote>
+  ),
+  h1: ({ children }) => <h1 className="frontui-md-h1">{children}</h1>,
+  h2: ({ children }) => <h2 className="frontui-md-h2">{children}</h2>,
+  h3: ({ children }) => <h3 className="frontui-md-h3">{children}</h3>,
+  hr: () => <hr className="frontui-md-hr" />,
+  table: ({ children }) => (
+    <div className="frontui-md-table-wrap">
+      <table className="frontui-md-table">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => <th className="frontui-md-th">{children}</th>,
+  td: ({ children }) => <td className="frontui-md-td">{children}</td>,
+} satisfies Components;
+
 export const MessageMarkdown = React.memo(
-  ({ content, streaming = false }: MessageMarkdownProps) => {
+  ({ content }: MessageMarkdownProps) => {
     return (
-      <div className={cn("frontui-markdown max-w-3xl", "max-w-[calc(768px-36px)]")}>
+      <div className={cn("max-w-3xl", "max-w-[calc(768px-36px)]")}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            p: ({ children }) => <p className="frontui-md-p">{children}</p>,
-            a: ({ href, children }) => (
-              <a
-                href={href}
-                target="_blank"
-                rel="noreferrer"
-                className="frontui-md-a"
-              >
-                {children}
-              </a>
-            ),
-            strong: ({ children }) => (
-              <strong className="frontui-md-strong">{children}</strong>
-            ),
-            em: ({ children }) => <em className="frontui-md-em">{children}</em>,
-            code: ({ className, children }) => {
-              const isBlock = className?.includes("language-");
-              const languageMatch = /language-([\w-]+)/.exec(className ?? "");
-              const language = languageMatch?.[1] ?? "text";
-              const code = String(children).replace(/\n$/, "");
-              if (isBlock) {
-                if (streaming) {
-                  return (
-                    <div className="rounded-lg border border-[var(--frontui-line)] bg-[#0f1115]">
-                      <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-[#9aa3b2]">
-                        {language}
-                      </div>
-                      <pre className="m-0 overflow-auto px-3 pb-3 pt-1 text-xs leading-6 text-[#e6edf3]">
-                        <code>{code}</code>
-                      </pre>
-                    </div>
-                  );
-                }
-                return (
-                  <div className="">
-                    <ShikiHighlighter
-                      language={language}
-                      theme="poimandres"
-                      showLanguage={true}
-                      // showLineNumbers
-                      className=""
-                    >
-                      {code}
-                    </ShikiHighlighter>
-                  </div>
-                );
-              }
-              return <code className="frontui-md-code-inline">{children}</code>;
-            },
-            pre: ({ children }) => (
-              <div className="frontui-md-pre">{children}</div>
-            ),
-            ul: ({ children }) => <ul className="frontui-md-ul">{children}</ul>,
-            ol: ({ children }) => <ol className="frontui-md-ol">{children}</ol>,
-            li: ({ children }) => <li className="frontui-md-li">{children}</li>,
-            blockquote: ({ children }) => (
-              <blockquote className="frontui-md-blockquote">
-                {children}
-              </blockquote>
-            ),
-            h1: ({ children }) => <h1 className="frontui-md-h1">{children}</h1>,
-            h2: ({ children }) => <h2 className="frontui-md-h2">{children}</h2>,
-            h3: ({ children }) => <h3 className="frontui-md-h3">{children}</h3>,
-            hr: () => <hr className="frontui-md-hr" />,
-            table: ({ children }) => (
-              <div className="frontui-md-table-wrap">
-                <table className="frontui-md-table">{children}</table>
-              </div>
-            ),
-            th: ({ children }) => <th className="frontui-md-th">{children}</th>,
-            td: ({ children }) => <td className="frontui-md-td">{children}</td>,
-          }}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={markdownComponents}
         >
           {content}
         </ReactMarkdown>

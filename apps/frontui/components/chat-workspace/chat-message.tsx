@@ -10,8 +10,8 @@ import {
 } from "@workspace/ui/components/dropdown-menu";
 import { cn } from "@workspace/ui/lib/utils";
 import { Copy, RotateCcw, Share2, ThumbsDown, ThumbsUp } from "lucide-react";
-import type { UIMessage } from "./types";
 import React from "react";
+import type { UIMessage } from "./types";
 
 type AssistantContentSegment =
   | { type: "text"; content: string }
@@ -152,7 +152,8 @@ export const ChatMessage = React.memo(
               role === "assistant" && "bg-transparent border-0 px-0 py-4",
             )}
           >
-            {role === "assistant" && (activeTools?.length || toolEvents?.length) ? (
+            {role === "assistant" &&
+            (activeTools?.length || toolEvents?.length) ? (
               <div className="mb-3 rounded-lg border border-[var(--frontui-line)] bg-[var(--frontui-surface)] px-3 py-2 text-xs text-[var(--frontui-muted)]">
                 {activeTools && activeTools.length > 0 ? (
                   <div className="font-medium text-[var(--frontui-ink)]">
@@ -191,10 +192,7 @@ export const ChatMessage = React.memo(
                 {segments.map((segment, idx) =>
                   segment.type === "text" ? (
                     <div key={`text-${idx}`} className="text-[13px] leading-7">
-                      <MessageMarkdown
-                        content={segment.content}
-                        streaming={!!pending}
-                      />
+                      <MessageMarkdown content={segment.content} />
                     </div>
                   ) : (
                     <details
@@ -223,9 +221,7 @@ export const ChatMessage = React.memo(
               </div>
             ) : (
               <div className="text-[13px] leading-7">
-                {content ? (
-                  <MessageMarkdown content={content} streaming={!!pending} />
-                ) : null}
+                {content ? <MessageMarkdown content={content} /> : null}
               </div>
             )}
 
