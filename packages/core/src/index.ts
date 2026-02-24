@@ -62,3 +62,89 @@ export {
   type RedisMemoryOptions,
   type SecureMemoryOptions,
 } from "./memory/index.js";
+
+// Runtime
+export {
+  createAIRuntimeManager,
+  type AIClientInstance,
+  type AIRuntimeManager,
+  type AIRuntimeManagerOptions,
+} from "./runtime/ai-runtime.js";
+export {
+  createOrchestratorRuntime,
+  type OrchestratorRuntime,
+  type OrchestratorRuntimeOptions,
+  type RuntimeAppLogger,
+} from "./runtime/orchestrator-runtime.js";
+
+// Plugins
+export {
+  readPluginCatalog,
+  setPluginEnabled,
+  type PluginCatalogEntry,
+} from "./plugins/catalog.js";
+
+// Context
+export {
+  buildConversationMetrics,
+  compactConversationContext,
+  computeConversationContextMetrics,
+  estimateMessagesTokens,
+  estimateTokens,
+  loadContextCompactionConfigFromDisk,
+  parsePagingValue,
+  resolveContextCompactionConfig,
+  type ContextCompactionResult,
+  type ContextCompactionRuntimeConfig,
+  type ContextMessage,
+  type ConversationHistoryMessage,
+  type ConversationContextMetrics,
+  toContextMessages,
+  toConversationHistoryMessages,
+} from "./context/management.js";
+
+// Chat
+export {
+  buildToolContext,
+  createToolExecutor,
+  deriveConversationTitle,
+  fallbackFromToolResults,
+  hasConversationTitle,
+  normalizeConversationTitle,
+  resolveToolOutputRouting,
+  toLLMMessages,
+  toPreview,
+  toTextContent,
+  wantsStream,
+  ToolTerminalResponseError,
+  type ChatPipelineMessage,
+  type ExecutedToolContext,
+  type PersistedToolEvent,
+  type ToolExecutionMode,
+} from "./chat/pipeline.js";
+export {
+  buildAIToolDefinitions,
+  buildFinalSystemPrompt,
+  DEFAULT_PERSONALITY_SYSTEM_PROMPT,
+  runConversationCompaction,
+} from "./chat/service.js";
+export {
+  executeChatRequest,
+  type ChatExecutionDeps,
+  type ChatExecutionResult,
+  type ChatRequestBody,
+} from "./chat/execute-chat.js";
+export {
+  executeConversationCompactionRequest,
+  executeConversationContextRequest,
+  executeConversationMetricsRequest,
+} from "./chat/context-apis.js";
+
+// Stream
+export {
+  appendSSESessionEvent,
+  closeSSESession,
+  createSSESession,
+  createSSESessionReadable,
+  hasSSESession,
+} from "./stream/sse-session-store.js";

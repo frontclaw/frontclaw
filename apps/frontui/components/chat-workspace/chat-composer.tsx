@@ -28,6 +28,7 @@ export function ChatComposer({
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       onSend(composerValue);
+      setComposerValue("");
     }
   };
 
@@ -35,7 +36,7 @@ export function ChatComposer({
     <div className="absolute bottom-4 left-2/4 w-full max-w-3xl">
       <div className="mx-auto max-w-3xl">
         {errorText ? (
-          <p className="absolute left-2/4 bottom-20 -translate-x-2/4 mb-2 rounded-lg border border-[#f1b5ad] bg-[#fdecea] px-3 py-2 text-sm font-medium text-[#b42318]">
+          <p className="absolute bottom-20 -translate-x-2/4 mb-2 rounded-lg border border-[#f1b5ad] bg-[#fdecea] px-3 py-2 text-sm font-medium text-[#b42318]">
             {errorText}
           </p>
         ) : null}
@@ -54,12 +55,9 @@ export function ChatComposer({
               placeholder={placeholder}
               minRows={1}
               maxRows={6}
-              className="
-        w-full resize-none bg-transparent
-        px-2 py-2 text-sm text-[var(--frontui-ink)]
-        outline-none
-        placeholder:text-[var(--frontui-muted)]
-      "
+              className={cn(
+                "w-full resize-none bg-transparent px-2 py-2 text-sm text-[var(--frontui-ink)] outline-none placeholder:text-[var(--frontui-muted)]",
+              )}
             />
 
             <button

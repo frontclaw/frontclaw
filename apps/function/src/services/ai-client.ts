@@ -4,85 +4,68 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   createAIClient,
+  createAIRuntimeManager,
   getConfigPath,
   getConfigs,
   type AIClientConfig,
+  type AIClientInstance,
 } from "@workspace/core";
 import type { Chat, FrontClawSchema } from "@workspace/schema";
 import { createOllama } from "ollama-ai-provider-v2";
 
-export type AIClientInstance = ReturnType<typeof createAIClient>;
-
-let aiClient = createAIClient({
-  debug: process.env.NODE_ENV === "development",
-});
-let configuredSystemPrompt = "";
-let aiReadyPromise: Promise<void> | null = null;
-let aiReloadPromise: Promise<void> | null = null;
-
-async function initializeAIClient(): Promise<void> {
-  const configPath = getConfigPath();
-  if (!configPath) {
-    throw new Error(
-      "Config path not found, please set CONFIG_PATH or FRONTCLAW_CONFIG_PATH environment variable",
-    );
-  }
-  const configs = (await getConfigs(configPath)) as FrontClawSchema;
-  const chatConfig = configs.ai_models?.chat;
-
-  configuredSystemPrompt =
-    typeof chatConfig?.system_prompt === "string"
-      ? chatConfig.system_prompt.trim()
-      : "";
-
-  if (!chatConfig?.provider || !chatConfig.model || !chatConfig.api_key) {
-    throw new Error(
-      "frontclaw.json missing ai_models.chat.provider/model/api_key",
-    );
-  }
-
-  const model = createProviderModel(chatConfig);
-
-  aiClient = createAIClient({
-    model,
+const runtime = createAIRuntimeManager({
+  initialClient: createAIClient({
     debug: process.env.NODE_ENV === "development",
-  });
-}
+  }),
+  initialize: async () => {
+    const configPath = getConfigPath();
+    if (!configPath) {
+      throw new Error(
+        "Config path not found, please set CONFIG_PATH or FRONTCLAW_CONFIG_PATH environment variable",
+      );
+    }
+    const configs = (await getConfigs(configPath)) as FrontClawSchema;
+    const chatConfig = configs.ai_models?.chat;
 
-function ensureAIReadyPromise(): Promise<void> {
-  if (!aiReadyPromise) {
-    aiReadyPromise = initializeAIClient();
-  }
-  return aiReadyPromise;
-}
+    const configuredSystemPrompt =
+      typeof chatConfig?.system_prompt === "string"
+        ? chatConfig.system_prompt.trim()
+        : "";
+
+    if (!chatConfig?.provider || !chatConfig.model || !chatConfig.api_key) {
+      throw new Error(
+        "frontclaw.json missing ai_models.chat.provider/model/api_key",
+      );
+    }
+
+    const model = createProviderModel(chatConfig);
+    return {
+      client: createAIClient({
+        model,
+        debug: process.env.NODE_ENV === "development",
+      }),
+      configuredSystemPrompt,
+    };
+  },
+  autoInitialize: true,
+});
+
+export { type AIClientInstance };
 
 export function waitForAIReady(): Promise<void> {
-  return ensureAIReadyPromise();
+  return runtime.waitForReady();
 }
 
 export async function reloadAIClient(): Promise<void> {
-  if (aiReloadPromise) {
-    return aiReloadPromise;
-  }
-
-  aiReloadPromise = (async () => {
-    const nextReady = initializeAIClient();
-    aiReadyPromise = nextReady;
-    await nextReady;
-  })()
-    .finally(() => {
-      aiReloadPromise = null;
-    });
-
-  return aiReloadPromise;
+  await runtime.reload();
 }
 
 export function getAIClient(): AIClientInstance {
-  return aiClient;
+  return runtime.getClient();
 }
 
 export function getConfiguredSystemPrompt(): string {
-  return configuredSystemPrompt;
+  return runtime.getConfiguredSystemPrompt();
 }
 
 function createProviderModel(config: Chat): NonNullable<AIClientConfig["model"]> {
@@ -123,12 +106,9 @@ function createProviderModel(config: Chat): NonNullable<AIClientConfig["model"]>
         name: "lmstudio",
         baseURL: config.base_url!,
       });
-
       return lmstudio(config.model!);
     }
     default:
       throw new Error(`Unsupported chat provider: ${config.provider}`);
   }
 }
-
-ensureAIReadyPromise();

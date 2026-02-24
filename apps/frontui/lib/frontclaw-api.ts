@@ -18,6 +18,18 @@ export type Message = {
   createdAt: string | null;
 };
 
+export type ConversationContextMetrics = {
+  estimatedPromptTokens: number;
+  contextWindowLimit: number;
+  tokensRemaining: number;
+  utilizationRatio: number;
+  compactWhenTokensReach: number;
+  tokensUntilCompaction: number;
+  autoCompact: boolean;
+  preserveRecentMessages: number;
+  historyMessageCount: number;
+};
+
 export type PluginInfo = {
   id: string;
   name?: string;
@@ -57,6 +69,14 @@ export type FrontclawConfig = {
   features?: Record<string, unknown>;
   embedded_box?: Record<string, unknown>;
   webhooks?: Record<string, unknown>;
+  context_management?: {
+    context_window_limit?: number;
+    compact_when_tokens_reach?: number;
+    compact_when_ratio?: number;
+    auto_compact?: boolean;
+    preserve_recent_messages?: number;
+    target_ratio_after_compact?: number;
+  };
 };
 
 export type ChatStreamMeta = {
@@ -74,6 +94,15 @@ export type ChatStreamDone = {
     name: string;
     arguments: Record<string, unknown>;
   }>;
+  contextCompaction?: {
+    compacted: boolean;
+    reason: "auto" | "manual";
+    beforeTokens: number;
+    afterTokens: number;
+    deletedMessages: number;
+    preservedMessages: number;
+    summaryMessageId?: string;
+  };
 };
 
 export type ChatStreamHandlers = {
@@ -100,6 +129,8 @@ export type ChatStreamHandlers = {
 };
 
 export const API_PREFIX = "/api/frontclaw" as const;
+type ChatStreamTransport = "sse" | "ws";
+const CHAT_TRANSPORT_STORAGE_KEY = "frontclaw:chat-transport";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_PREFIX}${path}`, {
@@ -198,6 +229,66 @@ export async function fetchMessages(
   return payload.messages || [];
 }
 
+export async function compactConversation(
+  conversationId: string,
+  options?: { force?: boolean; preserveRecentMessages?: number },
+): Promise<{
+  compacted: boolean;
+  result: {
+    compacted: boolean;
+    reason: "auto" | "manual";
+    beforeTokens: number;
+    afterTokens: number;
+    deletedMessages: number;
+    preservedMessages: number;
+    summaryMessageId?: string;
+  };
+}> {
+  const payload = await requestJson<{
+    success: boolean;
+    compacted: boolean;
+    result: {
+      compacted: boolean;
+      reason: "auto" | "manual";
+      beforeTokens: number;
+      afterTokens: number;
+      deletedMessages: number;
+      preservedMessages: number;
+      summaryMessageId?: string;
+    };
+  }>(`/api/v1/conversations/${conversationId}/compact`, {
+    method: "POST",
+    body: JSON.stringify(options ?? {}),
+  });
+
+  return {
+    compacted: payload.compacted,
+    result: payload.result,
+  };
+}
+
+export async function fetchConversationMetrics(
+  conversationId: string,
+  options?: { limit?: number; message?: string; systemPrompt?: string },
+): Promise<ConversationContextMetrics> {
+  const params = new URLSearchParams();
+  if (typeof options?.limit === "number" && Number.isFinite(options.limit)) {
+    params.set("limit", String(Math.max(1, Math.floor(options.limit))));
+  }
+  if (options?.message) params.set("message", options.message);
+  if (options?.systemPrompt) params.set("systemPrompt", options.systemPrompt);
+
+  const query = params.toString();
+  const payload = await requestJson<{
+    success: boolean;
+    metrics: ConversationContextMetrics;
+  }>(
+    `/api/v1/conversations/${conversationId}/metrics${query ? `?${query}` : ""}`,
+  );
+
+  return payload.metrics;
+}
+
 export async function fetchConfig(): Promise<FrontclawConfig> {
   const payload = await requestJson<{
     success: boolean;
@@ -248,6 +339,29 @@ export async function streamChat(
   },
   handlers: ChatStreamHandlers,
 ): Promise<void> {
+  const preferred = resolveChatStreamTransport();
+  if (preferred === "ws") {
+    try {
+      await streamChatWS(body, handlers);
+      return;
+    } catch {
+      // Fallback to SSE to preserve compatibility when WS is unavailable.
+    }
+  }
+
+  await streamChatSSE(body, handlers);
+}
+
+async function streamChatSSE(
+  body: {
+    message: string;
+    conversationId?: string;
+    title?: string;
+    stream?: boolean;
+    systemPrompt?: string;
+  },
+  handlers: ChatStreamHandlers,
+): Promise<void> {
   const response = await fetch(`${API_PREFIX}/api/v1/chat`, {
     method: "POST",
     headers: {
@@ -271,53 +385,6 @@ export async function streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  const emitEvent = (raw: string) => {
-    const lines = raw.split("\n");
-    let eventName = "message";
-    const dataLines: string[] = [];
-
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trim());
-      }
-    }
-
-    const parsed = dataLines.length > 0 ? safeParse(dataLines.join("\n")) : {};
-
-    if (eventName === "meta") handlers.onMeta?.(parsed as ChatStreamMeta);
-    if (eventName === "delta") handlers.onDelta?.(parsed as { text?: string });
-    if (eventName === "tool_start") {
-      handlers.onToolStart?.(
-        parsed as {
-          toolName?: string;
-          args?: Record<string, unknown>;
-          startedAt?: number;
-        },
-      );
-    }
-    if (eventName === "tool_result") {
-      handlers.onToolResult?.(
-        parsed as {
-          toolName?: string;
-          source?: "tool" | "skill";
-          durationMs?: number;
-          resultPreview?: string;
-        },
-      );
-    }
-    if (eventName === "tool_error") {
-      handlers.onToolError?.(
-        parsed as { toolName?: string; durationMs?: number; error?: string },
-      );
-    }
-    if (eventName === "done") handlers.onDone?.(parsed as ChatStreamDone);
-    if (eventName === "error") {
-      handlers.onError?.(parsed as { message?: string; error?: string });
-    }
-  };
-
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -327,14 +394,180 @@ export async function streamChat(
     let boundary = buffer.indexOf("\n\n");
     while (boundary !== -1) {
       const chunk = buffer.slice(0, boundary).trim();
-      if (chunk) emitEvent(chunk);
+      if (chunk) {
+        const parsed = parseSSEEvent(chunk);
+        if (parsed) dispatchChatStreamEvent(parsed.event, parsed.data, handlers);
+      }
       buffer = buffer.slice(boundary + 2);
       boundary = buffer.indexOf("\n\n");
     }
   }
 
   const tail = buffer.trim();
-  if (tail) emitEvent(tail);
+  if (tail) {
+    const parsed = parseSSEEvent(tail);
+    if (parsed) dispatchChatStreamEvent(parsed.event, parsed.data, handlers);
+  }
+}
+
+async function streamChatWS(
+  body: {
+    message: string;
+    conversationId?: string;
+    title?: string;
+    stream?: boolean;
+    systemPrompt?: string;
+  },
+  handlers: ChatStreamHandlers,
+): Promise<void> {
+  const wsUrl = resolveChatWebSocketUrl();
+  if (!wsUrl) throw new Error("WebSocket URL is not configured");
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let sawTerminalEvent = false;
+    let socket: WebSocket | null = null;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+      if (error) reject(error);
+      else resolve();
+    };
+
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch (error) {
+      finish(error as Error);
+      return;
+    }
+
+    socket.onopen = () => {
+      socket?.send(
+        JSON.stringify({
+          type: "start",
+          body: { ...body, stream: true },
+        }),
+      );
+    };
+
+    socket.onmessage = (event) => {
+      const parsed = safeParse(
+        typeof event.data === "string" ? event.data : String(event.data),
+      ) as {
+        event?: string;
+        data?: unknown;
+      };
+      if (typeof parsed.event !== "string") return;
+      dispatchChatStreamEvent(parsed.event, parsed.data, handlers);
+      if (parsed.event === "done" || parsed.event === "error") {
+        sawTerminalEvent = true;
+      }
+    };
+
+    socket.onerror = () => {
+      finish(new Error("WebSocket streaming failed"));
+    };
+
+    socket.onclose = () => {
+      if (!sawTerminalEvent) {
+        finish(new Error("WebSocket stream closed before completion"));
+        return;
+      }
+      finish();
+    };
+  });
+}
+
+function resolveChatStreamTransport(): ChatStreamTransport {
+  if (typeof window !== "undefined") {
+    const stored = window.localStorage.getItem(CHAT_TRANSPORT_STORAGE_KEY);
+    if (stored === "ws" || stored === "sse") return stored;
+  }
+  const env = process.env.NEXT_PUBLIC_FRONTCLAW_CHAT_TRANSPORT;
+  if (env === "ws" || env === "sse") return env;
+  return "sse";
+}
+
+function resolveChatWebSocketUrl(): string | null {
+  const configured =
+    process.env.NEXT_PUBLIC_FRONTCLAW_WS_BASE ||
+    process.env.NEXT_PUBLIC_FRONTCLAW_API_BASE ||
+    "http://127.0.0.1:9901";
+
+  try {
+    const url = new URL(configured);
+    if (url.protocol === "http:") url.protocol = "ws:";
+    if (url.protocol === "https:") url.protocol = "wss:";
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") return null;
+    url.pathname = "/api/v1/chat/ws";
+    url.search = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function parseSSEEvent(
+  raw: string,
+): { event: string; data: unknown } | null {
+  const lines = raw.split("\n");
+  let eventName = "message";
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trim());
+    }
+  }
+
+  if (dataLines.length === 0) return null;
+  return {
+    event: eventName,
+    data: safeParse(dataLines.join("\n")),
+  };
+}
+
+function dispatchChatStreamEvent(
+  eventName: string,
+  data: unknown,
+  handlers: ChatStreamHandlers,
+): void {
+  if (eventName === "meta") handlers.onMeta?.(data as ChatStreamMeta);
+  if (eventName === "delta") handlers.onDelta?.(data as { text?: string });
+  if (eventName === "tool_start") {
+    handlers.onToolStart?.(
+      data as {
+        toolName?: string;
+        args?: Record<string, unknown>;
+        startedAt?: number;
+      },
+    );
+  }
+  if (eventName === "tool_result") {
+    handlers.onToolResult?.(
+      data as {
+        toolName?: string;
+        source?: "tool" | "skill";
+        durationMs?: number;
+        resultPreview?: string;
+      },
+    );
+  }
+  if (eventName === "tool_error") {
+    handlers.onToolError?.(
+      data as { toolName?: string; durationMs?: number; error?: string },
+    );
+  }
+  if (eventName === "done") handlers.onDone?.(data as ChatStreamDone);
+  if (eventName === "error") {
+    handlers.onError?.(data as { message?: string; error?: string });
+  }
 }
 
 function safeParse(value: string): unknown {

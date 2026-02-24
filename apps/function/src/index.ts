@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
+import { createBunWebSocket } from "hono/bun";
 import { registerRoutes } from "./routes";
 import {
   waitForAIReady,
@@ -17,6 +18,7 @@ import {
 
 const app = new Hono();
 app.use(logger());
+const { upgradeWebSocket, websocket } = createBunWebSocket();
 
 registerRoutes(app, {
   orchestrator,
@@ -26,6 +28,7 @@ registerRoutes(app, {
   isRefreshInProgress,
   getAIClient,
   getConfiguredSystemPrompt,
+  upgradeWebSocket,
 });
 
 waitForAIReady()
@@ -48,4 +51,4 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-Bun.serve({ fetch: app.fetch, idleTimeout: 50, port: 9901 });
+Bun.serve({ fetch: app.fetch, websocket, idleTimeout: 50, port: 9901 });

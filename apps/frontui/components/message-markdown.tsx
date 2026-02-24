@@ -4,7 +4,9 @@ import { cn } from "@workspace/ui/lib/utils";
 import React from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import { rehypeInlineCodeProperty } from "react-shiki/web";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { CodeHighlight } from "./code-highlight";
 
 import "katex/dist/katex.min.css";
@@ -13,8 +15,8 @@ type MessageMarkdownProps = {
   content: string;
 };
 
-const remarkPlugins = [remarkGfm];
-const rehypePlugins = [rehypeInlineCodeProperty];
+const remarkPlugins = [remarkGfm, remarkMath];
+const rehypePlugins = [rehypeInlineCodeProperty, rehypeKatex];
 
 const markdownComponents = {
   p: ({ children }) => <p className="frontui-md-p">{children}</p>,

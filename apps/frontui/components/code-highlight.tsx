@@ -23,9 +23,9 @@ export const CodeHighlight = memo(
     const language = (match ? match[1] : "plaintext") as BundledLanguage;
     const rawCode = String(children).replace(/\n$/, "");
 
-    const handleCopy = () => {
-      window.navigator.clipboard.writeText(rawCode);
-      toast.info('Copied!')
+    const handleCopy = (code?: string) => {
+      window.navigator.clipboard.writeText(code || rawCode);
+      toast.info("Copied!");
     };
 
     useEffect(() => {
@@ -36,7 +36,7 @@ export const CodeHighlight = memo(
 
         const hast = highlighter.codeToHast(rawCode, {
           lang: language || "plaintext",
-          theme: "github-dark",
+          theme: "dracula-soft",
         });
 
         setTree(
@@ -50,14 +50,28 @@ export const CodeHighlight = memo(
     }, [rawCode, language, inline]);
 
     if (inline) {
-      return <code className={cn(className, "px-4")}>{rawCode}</code>;
+      return (
+        <code
+          className={cn(
+            className,
+            "p-1 bg-white font-medium rounded border cursor-pointer",
+          )}
+          onClick={() => {
+            handleCopy(rawCode);
+          }}
+        >
+          {rawCode}
+        </code>
+      );
     }
 
     if (!tree) {
       return (
         <pre className="shiki-skeleton relative">
-          <Header language={language} onCopyClick={handleCopy} />
-          <div className="px-4">
+          <div className="bg-gray-800/95 backdrop-blur">
+            <Header language={language} onCopyClick={handleCopy} />
+          </div>
+          <div className="px-4 frontui-md-pre">
             <code>{rawCode}</code>
           </div>
         </pre>
@@ -65,9 +79,11 @@ export const CodeHighlight = memo(
     }
 
     return (
-      <div className="relative">
-        <Header language={language} onCopyClick={handleCopy} />
-        <div className="overflow-x-auto">{tree}</div>
+      <div className="frontui-md-pre">
+        <div className="bg-gray-800/95 backdrop-blur">
+          <Header language={language} onCopyClick={handleCopy} />
+        </div>
+        <div>{tree}</div>
       </div>
     );
   },
@@ -83,7 +99,7 @@ const Header = ({
   onCopyClick: () => void;
 }) => {
   return (
-    <div className="bg-gray-800 w-full flex items-center justify-between sticky top-0 left-0 px-4 py-1">
+    <div className="bg-[rgb(40,42,54)] w-full flex items-center justify-between px-4 py-1">
       <div className="capitalize flex items-center gap-x-2">
         <Code2Icon size={14} /> <span>{language}</span>
       </div>
@@ -93,7 +109,7 @@ const Header = ({
           type="button"
           onClick={onCopyClick}
         >
-          <CopyIcon size={16} />
+          <CopyIcon size={14} />
         </button>
       </div>
     </div>

@@ -1,11 +1,15 @@
-import type { ToolDefinition } from "@workspace/core";
+import {
+  executeConversationCompactionRequest,
+  executeConversationContextRequest,
+  executeConversationMetricsRequest,
+  normalizeConversationTitle,
+  parsePagingValue,
+  executeChatRequest,
+} from "@workspace/core";
 import { primaryActions as pDB } from "@workspace/db";
 import type { Hono } from "hono";
 import { createScopedLogger } from "../lib/logging";
 import {
-  appendChatStreamEvent,
-  closeChatStreamSession,
-  createChatStreamSession,
   createChatStreamSSE,
   hasChatStreamSession,
 } from "../services/chat-stream-sessions";
@@ -24,271 +28,49 @@ type ConversationTitleUpdateBody = {
   title?: string;
 };
 
-const DEFAULT_PERSONALITY_SYSTEM_PROMPT = [
-  "You are Frontclaw AI, a practical and reliable assistant.",
-  "Prioritize accurate, safe, and actionable responses.",
-  "Be concise by default, but provide details when explicitly requested or when complexity requires it.",
-  "If tools are available and needed for current information, call them and use their outputs.",
-].join(" ");
-
-function parsePagingValue(raw: string | undefined, fallback: number): number {
-  if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed < 0) return fallback;
-  return parsed;
-}
-
-function toTextContent(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function toPreview(value: unknown, maxLength = 400): string {
-  const text = toTextContent(value);
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}...`;
-}
-
-type ExecutedToolContext = {
-  toolName: string;
-  args: Record<string, unknown>;
-  source: "tool" | "skill";
-  result: unknown;
+type ChatWSRequestMessage = {
+  type: "start";
+  body: Partial<ChatRequestBody>;
 };
 
-type PersistedToolEvent = {
-  type: "start" | "result" | "error";
-  toolName: string;
-  args?: Record<string, unknown>;
-  source?: "tool" | "skill";
-  durationMs?: number;
-  resultPreview?: string;
-  error?: string;
-  startedAt?: number;
+type SSEFrame = {
+  id?: number;
+  event: string;
+  data: unknown;
 };
 
-class ToolTerminalResponseError extends Error {
-  readonly terminalResponse: string;
-  readonly toolName: string;
-  readonly source: "tool" | "skill";
+function parseSSEFrame(chunk: string): SSEFrame | null {
+  let event = "message";
+  let data = "";
+  let id: number | undefined;
 
-  constructor(
-    terminalResponse: string,
-    toolName: string,
-    source: "tool" | "skill",
-  ) {
-    super(`Tool '${toolName}' ended request`);
-    this.name = "ToolTerminalResponseError";
-    this.terminalResponse = terminalResponse;
-    this.toolName = toolName;
-    this.source = source;
-  }
-}
-
-type ToolExecutionMode = "handoff_to_llm" | "end_request";
-
-type ToolControlEnvelope = {
-  __frontclaw?: {
-    mode?: ToolExecutionMode;
-    response?: unknown;
-  };
-  data?: unknown;
-};
-
-function resolveToolOutputRouting(raw: unknown): {
-  mode: ToolExecutionMode;
-  llmPayload: unknown;
-  terminalResponse?: string;
-} {
-  if (!raw || typeof raw !== "object") {
-    return { mode: "handoff_to_llm", llmPayload: raw };
-  }
-
-  const envelope = raw as ToolControlEnvelope;
-  const mode = envelope.__frontclaw?.mode;
-
-  if (mode === "end_request") {
-    const response =
-      envelope.__frontclaw?.response !== undefined
-        ? envelope.__frontclaw.response
-        : envelope.data !== undefined
-          ? envelope.data
-          : raw;
-    return {
-      mode: "end_request",
-      llmPayload: raw,
-      terminalResponse: toTextContent(response),
-    };
-  }
-
-  const handoffPayload = envelope.data !== undefined ? envelope.data : raw;
-  return {
-    mode: "handoff_to_llm",
-    llmPayload: handoffPayload,
-  };
-}
-
-async function fallbackFromToolResults(
-  aiClient: ReturnType<AIRouteDeps["getAIClient"]>,
-  baseMessages: Array<{
-    role: "system" | "user" | "assistant";
-    content: string;
-  }>,
-  executedTools: ExecutedToolContext[],
-): Promise<string> {
-  if (executedTools.length === 0) return "";
-
-  const fallbackResult = await aiClient.chat({
-    messages: [
-      ...baseMessages,
-      {
-        role: "assistant",
-        content:
-          "Tool execution finished. I will now synthesize a final answer using the tool outputs.",
-      },
-      {
-        role: "user",
-        content: `Tool outputs (JSON): ${JSON.stringify(executedTools)}`,
-      },
-      {
-        role: "user",
-        content:
-          "Provide the best final response to the original user request using the tool outputs above.",
-      },
-    ],
-    toolChoice: "none",
-  });
-
-  return fallbackResult.content || "";
-}
-
-function hasConversationTitle(title: string | null | undefined): boolean {
-  return typeof title === "string" && title.trim().length > 0;
-}
-
-function deriveConversationTitle(prompt: string): string {
-  const maxLength = 150;
-  const normalized = prompt
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/[`*_#>\[\]\(\)]/g, " ")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!normalized) {
-    return "New conversation";
-  }
-
-  let title = normalized;
-  const sentenceMatch = normalized.match(/^(.{1,150}?)([.!?]|$)/);
-  if (sentenceMatch?.[1] && sentenceMatch[1].trim().length >= 8) {
-    title = sentenceMatch[1].trim();
-  }
-
-  if (title.length > maxLength) {
-    const shortened = title.slice(0, maxLength).trimEnd();
-    const lastSpace = shortened.lastIndexOf(" ");
-    title = lastSpace > 40 ? shortened.slice(0, lastSpace) : shortened;
-  }
-
-  return title;
-}
-
-function normalizeConversationTitle(title: string): string {
-  const maxLength = 150;
-  const normalized = title.replace(/\s+/g, " ").trim();
-  if (!normalized) return "";
-  return normalized.slice(0, maxLength);
-}
-
-function toSSEChunk(event: string, payload: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-}
-
-function toConversationHistory(
-  history: Awaited<ReturnType<typeof pDB.getMessages>>,
-): Array<{ role: "user" | "assistant"; content: string }> {
-  const mapped: Array<{ role: "user" | "assistant"; content: string }> = [];
-
-  for (const entry of history) {
-    if (entry.role === "user" || entry.role === "assistant") {
-      mapped.push({ role: entry.role, content: entry.content });
+  for (const line of chunk.split("\n")) {
+    if (line.startsWith("id:")) {
+      const parsed = Number.parseInt(line.slice(3).trim(), 10);
+      id = Number.isNaN(parsed) ? undefined : parsed;
+    } else if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      data += line.slice(5).trim();
     }
   }
 
-  return mapped;
-}
+  if (!data) return null;
 
-function toLLMMessages(
-  messages: Array<{ role: string; content: string }>,
-): Array<{ role: "system" | "user" | "assistant"; content: string }> {
-  return messages
-    .filter(
-      (m) =>
-        m.role === "system" || m.role === "user" || m.role === "assistant",
-    )
-    .map((m) => ({
-      role: m.role as "system" | "user" | "assistant",
-      content: m.content,
-    }));
-}
-
-function wantsStream(
-  acceptHeader: string | undefined,
-  body: ChatRequestBody,
-): boolean {
-  if (body.stream === true) return true;
-  return (acceptHeader || "").includes("text/event-stream");
-}
-
-function buildToolContext(
-  tools: Array<{
-    name: string;
-    description?: string;
-    parameters?: {
-      properties?: Record<string, unknown>;
-      required?: string[];
-    };
-  }>,
-  skills: Array<{
-    name: string;
-    description?: string;
-    inputSchema?: {
-      properties?: Record<string, unknown>;
-      required?: string[];
-    };
-  }>,
-): string {
-  if (tools.length === 0 && skills.length === 0) {
-    return "";
+  let parsedData: unknown;
+  try {
+    parsedData = JSON.parse(data);
+  } catch {
+    parsedData = { value: data };
   }
 
-  const lines: string[] = [
-    "AVAILABLE TOOLS (LLM-CALLABLE):",
-    "Call tools when needed. Use exact names and valid JSON arguments.",
-  ];
+  return { id, event, data: parsedData };
+}
 
-  for (const tool of tools) {
-    const properties = Object.keys(tool.parameters?.properties || {});
-    const required = tool.parameters?.required || [];
-    lines.push(
-      `- ${tool.name}: ${tool.description || "No description"}; args=[${properties.join(", ")}]; required=[${required.join(", ")}]`,
-    );
-  }
-
-  for (const skill of skills) {
-    const properties = Object.keys(skill.inputSchema?.properties || {});
-    const required = skill.inputSchema?.required || [];
-    lines.push(
-      `- ${skill.name}: ${skill.description || "No description"}; args=[${properties.join(", ")}]; required=[${required.join(", ")}]`,
-    );
-  }
-
-  return lines.join("\n");
+function toTextMessage(data: string | ArrayBuffer | Uint8Array): string {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+  return new TextDecoder().decode(data);
 }
 
 export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
@@ -636,112 +418,36 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
 
   app.get("/api/v1/conversations/:conversationId/context", async (c) => {
     try {
-      await awaitOrchestratorReady();
-      await awaitAIReady();
-
-      const conversationId = c.req.param("conversationId");
-      const conversation = await pDB.getConversation(conversationId);
-      if (!conversation) {
-        return c.json(
-          {
-            success: false,
-            message: "Conversation not found",
+      const result = await executeConversationContextRequest({
+        conversationId: c.req.param("conversationId"),
+        query: {
+          limit: c.req.query("limit"),
+          message: c.req.query("message"),
+          systemPrompt: c.req.query("systemPrompt"),
+        },
+        deps: {
+          awaitOrchestratorReady,
+          awaitAIReady,
+          getConfiguredSystemPrompt,
+          getAIClient,
+          orchestrator,
+          db: {
+            getConversation: async (id) => await pDB.getConversation(id),
+            getMessages: async (conversationId, options) =>
+              await pDB.getMessages(conversationId, options),
+            createMessage: async (value) => await pDB.createMessage(value),
+            deleteMessagesByIds: async (conversationId, messageIds) =>
+              await pDB.deleteMessagesByIds(conversationId, messageIds),
+            touchConversation: async (conversationId) =>
+              await pDB.touchConversation(conversationId),
           },
-          404,
-        );
-      }
-
-      const limit = parsePagingValue(c.req.query("limit"), 100);
-      const requestedMessage = (c.req.query("message") || "").trim();
-      const additionalSystemPrompt = (c.req.query("systemPrompt") || "").trim();
-
-      const historyRows = await pDB.getMessages(conversation.id, { limit });
-      const historyMessages = toConversationHistory(historyRows);
-
-      const tools = await orchestrator.collectTools();
-      const skills = await orchestrator.collectSkills();
-      const toolContext = buildToolContext(tools, skills);
-
-      const personalitySystemPrompt =
-        getConfiguredSystemPrompt() || DEFAULT_PERSONALITY_SYSTEM_PROMPT;
-      const baseSystemPrompt = additionalSystemPrompt
-        ? `${personalitySystemPrompt}\n\nAdditional system instructions:\n${additionalSystemPrompt}`
-        : personalitySystemPrompt;
-      const transformedSystemPrompt =
-        await orchestrator.transformSystemMessage(baseSystemPrompt);
-      const finalSystemPrompt = toolContext
-        ? `${transformedSystemPrompt}\n\n${toolContext}`
-        : transformedSystemPrompt;
-
-      let promptResult:
-        | { success: true; content: string; interceptedBy?: string }
-        | { success: false; code?: string; message: string; blockedBy?: string }
-        | null = null;
-
-      let userMessageForContext = requestedMessage;
-      if (requestedMessage) {
-        const processedPrompt = await orchestrator.processPrompt(requestedMessage);
-        if (!processedPrompt.success) {
-          return c.json(
-            {
-              success: false,
-              message: processedPrompt.error?.message || "Prompt processing failed",
-              code: processedPrompt.error?.code,
-              blockedBy: processedPrompt.error?.pluginId,
-              conversationId: conversation.id,
-            },
-            403,
-          );
-        }
-        userMessageForContext = toTextContent(processedPrompt.result || requestedMessage);
-        promptResult = {
-          success: true,
-          content: userMessageForContext,
-          interceptedBy: processedPrompt.interceptedBy || undefined,
-        };
-      }
-
-      const pipelineMessages = [
-        { role: "system" as const, content: finalSystemPrompt },
-        ...historyMessages,
-        ...(userMessageForContext
-          ? [{ role: "user" as const, content: userMessageForContext }]
-          : []),
-      ];
-
-      const llmCallResult = await orchestrator.beforeLLMCall(pipelineMessages);
-      if (!llmCallResult.success) {
-        return c.json(
-          {
-            success: false,
-            message: llmCallResult.error?.message || "LLM call blocked",
-            code: llmCallResult.error?.code,
-            blockedBy: llmCallResult.error?.pluginId,
-            conversationId: conversation.id,
-          },
-          403,
-        );
-      }
-
-      const llmMessages = toLLMMessages(llmCallResult.result || pipelineMessages);
-
-      return c.json({
-        success: true,
-        conversationId: conversation.id,
-        context: {
-          systemPrompt: finalSystemPrompt,
-          historyCount: historyMessages.length,
-          historyMessages,
-          pipelineMessages,
-          llmMessages,
-          toolCount: tools.length,
-          skillCount: skills.length,
-          promptInterceptedBy: promptResult?.success
-            ? promptResult.interceptedBy
-            : undefined,
-          llmInterceptedBy: llmCallResult.interceptedBy || undefined,
         },
       });
+
+      return c.json(
+        result.body,
+        result.status as 200 | 403 | 404 | 500,
+      );
     } catch (error) {
       console.error(error);
       return c.json(
@@ -754,462 +460,125 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
     }
   });
 
-  app.post("/api/v1/chat", async (c) => {
+  app.get("/api/v1/conversations/:conversationId/metrics", async (c) => {
     try {
-      chatLogger.info("Incoming chat request", undefined, { essential: true });
-      await awaitOrchestratorReady();
-      await awaitAIReady();
-      chatLogger.debug("Dependencies ready");
-
-      const body = (await c.req.json()) as Partial<ChatRequestBody>;
-      const message =
-        typeof body.message === "string" ? body.message.trim() : "";
-      chatLogger.debug("Parsed request payload", {
-        hasConversationId: !!body.conversationId,
-        messageLength: message.length,
-        stream: body.stream === true,
-      });
-
-      if (!message) {
-        return c.json({ success: false, message: "Message is required" }, 400);
-      }
-
-      let conversation = body.conversationId
-        ? await pDB.getConversation(body.conversationId)
-        : await pDB.createConversation({
-            profileId: body.profileId,
-            title: body.title || deriveConversationTitle(message),
-            metadata: {},
-          });
-
-      if (!conversation) {
-        return c.json(
-          { success: false, message: "Conversation not found" },
-          404,
-        );
-      }
-
-      const historyRows = await pDB.getMessages(conversation.id, {
-        limit: 100,
-      });
-      const historyMessages = toConversationHistory(historyRows);
-
-      const userMessage = await pDB.createMessage({
-        conversationId: conversation.id,
-        role: "user",
-        content: message,
-      });
-      await pDB.touchConversation(conversation.id);
-
-      const promptResult = await orchestrator.processPrompt(message);
-      chatLogger.debug("Prompt pipeline result", {
-        success: promptResult.success,
-        interceptedBy: promptResult.interceptedBy,
-      });
-
-      if (!hasConversationTitle(conversation.title)) {
-        const promptForTitle =
-          promptResult.success && promptResult.result
-            ? toTextContent(promptResult.result)
-            : message;
-        const title = deriveConversationTitle(promptForTitle);
-        await pDB.setConversationTitle(conversation.id, title);
-        conversation = {
-          ...conversation,
-          title,
-        };
-      }
-
-      if (!promptResult.success) {
-        return c.json(
-          {
-            success: false,
-            message: promptResult.error?.message || "Prompt processing failed",
-            code: promptResult.error?.code,
-            blockedBy: promptResult.error?.pluginId,
-            conversationId: conversation.id,
-            messageId: userMessage?.id,
-          },
-          403,
-        );
-      }
-
-      if (promptResult.interceptedBy) {
-        const interceptedText = toTextContent(promptResult.result);
-        const assistantMessage = await pDB.createMessage({
-          conversationId: conversation.id,
-          role: "assistant",
-          content: interceptedText,
-          metadata: { interceptedBy: promptResult.interceptedBy },
-        });
-        await pDB.touchConversation(conversation.id);
-
-        return c.json({
-          success: true,
-          conversationId: conversation.id,
-          response: promptResult.result,
-          interceptedBy: promptResult.interceptedBy,
-          messages: {
-            user: userMessage,
-            assistant: assistantMessage,
-          },
-        });
-      }
-
-      const tools = await orchestrator.collectTools();
-      const skills = await orchestrator.collectSkills();
-      chatLogger.debug("Capabilities resolved", {
-        tools: tools.length,
-        skills: skills.length,
-      });
-      const toolContext = buildToolContext(tools, skills);
-
-      const personalitySystemPrompt =
-        getConfiguredSystemPrompt() || DEFAULT_PERSONALITY_SYSTEM_PROMPT;
-      const additionalSystemPrompt =
-        typeof body.systemPrompt === "string" ? body.systemPrompt.trim() : "";
-      const baseSystemPrompt = additionalSystemPrompt
-        ? `${personalitySystemPrompt}\n\nAdditional system instructions:\n${additionalSystemPrompt}`
-        : personalitySystemPrompt;
-      const transformedSystemPrompt =
-        await orchestrator.transformSystemMessage(baseSystemPrompt);
-      const finalSystemPrompt = toolContext
-        ? `${transformedSystemPrompt}\n\n${toolContext}`
-        : transformedSystemPrompt;
-
-      const pipelineMessages = [
-        { role: "system" as const, content: finalSystemPrompt },
-        ...historyMessages,
-        { role: "user" as const, content: promptResult.result || message },
-      ];
-
-      const llmCallResult = await orchestrator.beforeLLMCall(pipelineMessages);
-      chatLogger.debug("Pre-LLM pipeline result", {
-        success: llmCallResult.success,
-        interceptedBy: llmCallResult.interceptedBy,
-      });
-
-      if (!llmCallResult.success) {
-        return c.json(
-          {
-            success: false,
-            message: llmCallResult.error?.message || "LLM call blocked",
-            code: llmCallResult.error?.code,
-            conversationId: conversation.id,
-            messageId: userMessage?.id,
-          },
-          403,
-        );
-      }
-
-      if (llmCallResult.interceptedBy) {
-        const interceptedText = toTextContent(llmCallResult.result);
-        const assistantMessage = await pDB.createMessage({
-          conversationId: conversation.id,
-          role: "assistant",
-          content: interceptedText,
-          metadata: { interceptedBy: llmCallResult.interceptedBy },
-        });
-        await pDB.touchConversation(conversation.id);
-
-        return c.json({
-          success: true,
-          conversationId: conversation.id,
-          response: llmCallResult.result,
-          interceptedBy: llmCallResult.interceptedBy,
-          messages: {
-            user: userMessage,
-            assistant: assistantMessage,
-          },
-        });
-      }
-
-      const aiTools: ToolDefinition[] = tools.map((t) => ({
-        name: t.name,
-        description: t.description || "",
-        parameters: {
-          type: "object" as const,
-          properties: t.parameters?.properties || {},
-          required: t.parameters?.required,
+      const result = await executeConversationMetricsRequest({
+        conversationId: c.req.param("conversationId"),
+        query: {
+          limit: c.req.query("limit"),
+          message: c.req.query("message"),
+          systemPrompt: c.req.query("systemPrompt"),
         },
-      }));
-
-      const aiSkills: ToolDefinition[] = skills.map((s) => ({
-        name: s.name,
-        description: s.description || "",
-        parameters: {
-          type: "object" as const,
-          properties: s.inputSchema.properties || {},
-          required: s.inputSchema.required,
+        deps: {
+          awaitOrchestratorReady,
+          awaitAIReady,
+          getConfiguredSystemPrompt,
+          getAIClient,
+          orchestrator,
+          db: {
+            getConversation: async (id) => await pDB.getConversation(id),
+            getMessages: async (conversationId, options) =>
+              await pDB.getMessages(conversationId, options),
+            createMessage: async (value) => await pDB.createMessage(value),
+            deleteMessagesByIds: async (conversationId, messageIds) =>
+              await pDB.deleteMessagesByIds(conversationId, messageIds),
+            touchConversation: async (conversationId) =>
+              await pDB.touchConversation(conversationId),
+          },
         },
-      }));
+      });
+      return c.json(result.body, result.status as 200 | 404 | 500);
+    } catch (error) {
+      return c.json(
+        {
+          success: false,
+          message: "Failed to fetch conversation metrics",
+          error: (error as Error).message,
+        },
+        500,
+      );
+    }
+  });
 
-      const llmMessages = toLLMMessages(llmCallResult.result || pipelineMessages);
-
-      const createToolExecutor = (
-        emitToolEvent?: (event: string, payload: unknown) => void,
-        onToolCompleted?: (tool: ExecutedToolContext) => void,
-        onToolEvent?: (event: PersistedToolEvent) => void,
-      ) => {
-        return async (toolName: string, args: Record<string, unknown>) => {
-          chatLogger.debug("Tool execution started", { toolName, args });
-          const startedAt = Date.now();
-          const startEvent: PersistedToolEvent = {
-            type: "start",
-            toolName,
-            args,
-            startedAt,
-          };
-          onToolEvent?.(startEvent);
-          emitToolEvent?.("tool_start", startEvent);
-
-          try {
-            const skillResult = await orchestrator.executeSkill(toolName, args);
-            if (skillResult.success) {
-              const durationMs = Date.now() - startedAt;
-              chatLogger.debug("Skill execution completed", {
-                toolName,
-                durationMs,
-              });
-              const routing = resolveToolOutputRouting(skillResult.result);
-              onToolCompleted?.({
-                toolName,
-                args,
-                source: "skill",
-                result: routing.llmPayload,
-              });
-              const resultEvent: PersistedToolEvent = {
-                type: "result",
-                toolName,
-                source: "skill",
-                durationMs,
-                resultPreview: toPreview(
-                  routing.mode === "end_request"
-                    ? routing.terminalResponse
-                    : routing.llmPayload,
-                ),
-              };
-              onToolEvent?.(resultEvent);
-              emitToolEvent?.("tool_result", resultEvent);
-              if (routing.mode === "end_request") {
-                throw new ToolTerminalResponseError(
-                  routing.terminalResponse || "",
-                  toolName,
-                  "skill",
-                );
-              }
-              return routing.llmPayload;
-            }
-
-            const toolResult = await orchestrator.executeTool(toolName, args, {
-              source: "llm",
-            });
-            if (!toolResult.success) {
-              throw new Error(toolResult.error || "Tool execution failed");
-            }
-
-            const durationMs = Date.now() - startedAt;
-            chatLogger.debug("Tool execution completed", {
-              toolName,
-              durationMs,
-            });
-            const routing = resolveToolOutputRouting(toolResult.result);
-            onToolCompleted?.({
-              toolName,
-              args,
-              source: "tool",
-              result: routing.llmPayload,
-            });
-            const resultEvent: PersistedToolEvent = {
-              type: "result",
-              toolName,
-              source: "tool",
-              durationMs,
-              resultPreview: toPreview(
-                routing.mode === "end_request"
-                  ? routing.terminalResponse
-                  : routing.llmPayload,
-              ),
-            };
-            onToolEvent?.(resultEvent);
-            emitToolEvent?.("tool_result", resultEvent);
-            if (routing.mode === "end_request") {
-              throw new ToolTerminalResponseError(
-                routing.terminalResponse || "",
-                toolName,
-                "tool",
-              );
-            }
-            return routing.llmPayload;
-          } catch (error) {
-            const durationMs = Date.now() - startedAt;
-            if (!(error instanceof ToolTerminalResponseError)) {
-              chatLogger.warn("Tool execution failed", {
-                toolName,
-                durationMs,
-                error: (error as Error).message,
-              });
-              const errorEvent: PersistedToolEvent = {
-                type: "error",
-                toolName,
-                durationMs,
-                error: (error as Error).message,
-              };
-              onToolEvent?.(errorEvent);
-              emitToolEvent?.("tool_error", errorEvent);
-            }
-            throw error;
-          }
+  app.post("/api/v1/conversations/:conversationId/compact", async (c) => {
+    try {
+      let body: { force?: boolean; preserveRecentMessages?: number } = {};
+      try {
+        body = (await c.req.json()) as {
+          force?: boolean;
+          preserveRecentMessages?: number;
         };
-      };
+      } catch {
+        body = {};
+      }
 
-      const mergedTools =
-        aiTools.length > 0 || aiSkills.length > 0
-          ? [...aiTools, ...aiSkills]
-          : undefined;
+      const result = await executeConversationCompactionRequest({
+        conversationId: c.req.param("conversationId"),
+        body,
+        deps: {
+          awaitOrchestratorReady,
+          awaitAIReady,
+          getConfiguredSystemPrompt,
+          getAIClient,
+          orchestrator,
+          db: {
+            getConversation: async (id) => await pDB.getConversation(id),
+            getMessages: async (conversationId, options) =>
+              await pDB.getMessages(conversationId, options),
+            createMessage: async (value) => await pDB.createMessage(value),
+            deleteMessagesByIds: async (conversationId, messageIds) =>
+              await pDB.deleteMessagesByIds(conversationId, messageIds),
+            touchConversation: async (conversationId) =>
+              await pDB.touchConversation(conversationId),
+          },
+        },
+      });
 
-      if (wantsStream(c.req.header("accept"), body as ChatRequestBody)) {
-        chatLogger.debug("Using streaming response mode");
-        const streamId = createChatStreamSession();
-        const sendEvent = (event: string, payload: unknown) => {
-          appendChatStreamEvent(streamId, event, payload);
-        };
+      return c.json(result.body, result.status as 200 | 404 | 500);
+    } catch (error) {
+      return c.json(
+        {
+          success: false,
+          message: "Failed to compact context",
+          error: (error as Error).message,
+        },
+        500,
+      );
+    }
+  });
 
-        void (async () => {
-          const persistedToolEvents: PersistedToolEvent[] = [];
-          try {
-            sendEvent("meta", {
-              streamId,
-              conversationId: conversation.id,
-              userMessageId: userMessage?.id,
-            });
+  app.post("/api/v1/chat", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as Partial<ChatRequestBody>;
+    try {
+      const result = await executeChatRequest({
+        body,
+        acceptHeader: c.req.header("accept"),
+        deps: {
+          awaitOrchestratorReady,
+          awaitAIReady,
+          getAIClient,
+          getConfiguredSystemPrompt,
+          orchestrator,
+          db: {
+            getConversation: async (id) => await pDB.getConversation(id),
+            createConversation: async (value) =>
+              await pDB.createConversation(value),
+            getMessages: async (conversationId, options) =>
+              await pDB.getMessages(conversationId, options),
+            createMessage: async (value) => await pDB.createMessage(value),
+            touchConversation: async (conversationId) =>
+              await pDB.touchConversation(conversationId),
+            setConversationTitle: async (conversationId, title) =>
+              await pDB.setConversationTitle(conversationId, title),
+            deleteMessagesByIds: async (conversationId, messageIds) =>
+              await pDB.deleteMessagesByIds(conversationId, messageIds),
+          },
+          logger: chatLogger,
+        },
+      });
 
-            const aiClient = getAIClient();
-            const executedTools: ExecutedToolContext[] = [];
-            const streamToolExecutor = createToolExecutor(
-              sendEvent,
-              (tool) => {
-                executedTools.push(tool);
-              },
-              (event) => {
-                persistedToolEvents.push(event);
-              },
-            );
-            const iterator = aiClient
-              .chatStream({
-                messages: llmMessages,
-                tools: mergedTools,
-                toolChoice: mergedTools ? "auto" : "none",
-                toolExecutor: streamToolExecutor,
-              })
-              [Symbol.asyncIterator]();
-
-            let rawAssistantResponse = "";
-            let toolCalls: Array<{
-              id: string;
-              name: string;
-              arguments: Record<string, unknown>;
-            }> = [];
-
-            while (true) {
-              const next = await iterator.next();
-
-              if (next.done) {
-                rawAssistantResponse = next.value.content || rawAssistantResponse;
-                toolCalls = next.value.toolCalls;
-                break;
-              }
-
-              if (next.value.textDelta) {
-                rawAssistantResponse += next.value.textDelta;
-                sendEvent("delta", { text: next.value.textDelta });
-              }
-            }
-
-            const finalResponse =
-              await orchestrator.afterLLMCall(
-                rawAssistantResponse.trim().length === 0 && executedTools.length > 0
-                  ? await fallbackFromToolResults(aiClient, llmMessages, executedTools)
-                  : rawAssistantResponse,
-              );
-            if (rawAssistantResponse.trim().length === 0 && executedTools.length > 0) {
-              chatLogger.info(
-                "Applied fallback synthesis after empty post-tool stream response",
-                { executedTools: executedTools.length },
-                { essential: true },
-              );
-            }
-
-            const assistantMetadata: Record<string, unknown> = {};
-            if (toolCalls.length > 0) {
-              assistantMetadata.toolCalls = toolCalls;
-            }
-            if (persistedToolEvents.length > 0) {
-              assistantMetadata.toolEvents = persistedToolEvents;
-            }
-            const assistantMessage = await pDB.createMessage({
-              conversationId: conversation.id,
-              role: "assistant",
-              content: finalResponse,
-              metadata: assistantMetadata,
-            });
-            await pDB.touchConversation(conversation.id);
-
-            sendEvent("done", {
-              conversationId: conversation.id,
-              userMessageId: userMessage?.id,
-              assistantMessageId: assistantMessage?.id,
-              response: finalResponse,
-              toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-            });
-            chatLogger.info(
-              "Streaming chat completed",
-              { conversationId: conversation.id, toolCalls: toolCalls.length },
-              { essential: true },
-            );
-          } catch (error) {
-            if (error instanceof ToolTerminalResponseError) {
-              const finalResponse = await orchestrator.afterLLMCall(
-                error.terminalResponse,
-              );
-              const assistantMessage = await pDB.createMessage({
-                conversationId: conversation.id,
-                role: "assistant",
-                content: finalResponse,
-                metadata: {
-                  terminalByTool: error.toolName,
-                  terminalSource: error.source,
-                  ...(persistedToolEvents.length > 0
-                    ? { toolEvents: persistedToolEvents }
-                    : {}),
-                },
-              });
-              await pDB.touchConversation(conversation.id);
-              sendEvent("done", {
-                conversationId: conversation.id,
-                userMessageId: userMessage?.id,
-                assistantMessageId: assistantMessage?.id,
-                response: finalResponse,
-              });
-              chatLogger.info(
-                "Request ended directly by tool response",
-                { toolName: error.toolName, source: error.source },
-                { essential: true },
-              );
-              closeChatStreamSession(streamId);
-              return;
-            }
-            chatLogger.error("Streaming chat failed", error);
-            sendEvent("error", {
-              message: "Chat streaming failed",
-              error: (error as Error).message,
-            });
-          } finally {
-            closeChatStreamSession(streamId);
-          }
-        })();
-
-        return new Response(createChatStreamSSE(streamId), {
+      if (result.kind === "stream") {
+        return new Response(result.stream, {
           status: 200,
           headers: {
             "Content-Type": "text/event-stream; charset=utf-8",
@@ -1219,105 +588,7 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
         });
       }
 
-      const aiClient = getAIClient();
-      const executedTools: ExecutedToolContext[] = [];
-      const persistedToolEvents: PersistedToolEvent[] = [];
-      const toolExecutor = createToolExecutor(
-        undefined,
-        (tool) => {
-          executedTools.push(tool);
-        },
-        (event) => {
-          persistedToolEvents.push(event);
-        },
-      );
-      let aiResult;
-      try {
-        aiResult = await aiClient.chat({
-          messages: llmMessages,
-          tools: mergedTools,
-          toolChoice: mergedTools ? "auto" : "none",
-          toolExecutor,
-        });
-      } catch (error) {
-        if (error instanceof ToolTerminalResponseError) {
-          const finalResponse = await orchestrator.afterLLMCall(
-            error.terminalResponse,
-          );
-          const assistantMessage = await pDB.createMessage({
-            conversationId: conversation.id,
-            role: "assistant",
-            content: finalResponse,
-            metadata: {
-              terminalByTool: error.toolName,
-              terminalSource: error.source,
-              ...(persistedToolEvents.length > 0
-                ? { toolEvents: persistedToolEvents }
-                : {}),
-            },
-          });
-          await pDB.touchConversation(conversation.id);
-          chatLogger.info(
-            "Request ended directly by tool response",
-            { toolName: error.toolName, source: error.source },
-            { essential: true },
-          );
-          return c.json({
-            success: true,
-            conversationId: conversation.id,
-            response: finalResponse,
-            tools: tools.length > 0 ? tools.map((t) => t.name) : undefined,
-            skills: skills.length > 0 ? skills.map((s) => s.name) : undefined,
-            toolCalls: [],
-            messages: {
-              user: userMessage,
-              assistant: assistantMessage,
-            },
-          });
-        }
-        throw error;
-      }
-
-      const rawFinalContent =
-        aiResult.content.trim().length === 0 && executedTools.length > 0
-          ? await fallbackFromToolResults(aiClient, llmMessages, executedTools)
-          : aiResult.content;
-      if (aiResult.content.trim().length === 0 && executedTools.length > 0) {
-        chatLogger.info(
-          "Applied fallback synthesis after empty post-tool response",
-          { executedTools: executedTools.length },
-          { essential: true },
-        );
-      }
-      const finalResponse = await orchestrator.afterLLMCall(rawFinalContent);
-      const assistantMetadata: Record<string, unknown> = {};
-      if (aiResult.toolCalls.length > 0) {
-        assistantMetadata.toolCalls = aiResult.toolCalls;
-      }
-      if (persistedToolEvents.length > 0) {
-        assistantMetadata.toolEvents = persistedToolEvents;
-      }
-      const assistantMessage = await pDB.createMessage({
-        conversationId: conversation.id,
-        role: "assistant",
-        content: finalResponse,
-        metadata: assistantMetadata,
-      });
-      await pDB.touchConversation(conversation.id);
-
-      return c.json({
-        success: true,
-        conversationId: conversation.id,
-        response: finalResponse,
-        tools: tools.length > 0 ? tools.map((t) => t.name) : undefined,
-        skills: skills.length > 0 ? skills.map((s) => s.name) : undefined,
-        toolCalls:
-          aiResult.toolCalls.length > 0 ? aiResult.toolCalls : undefined,
-        messages: {
-          user: userMessage,
-          assistant: assistantMessage,
-        },
-      });
+      return c.json(result.body, result.status as 200 | 400 | 403 | 404 | 500);
     } catch (error) {
       chatLogger.error("Chat processing failed", error);
       return c.json(
@@ -1330,6 +601,167 @@ export function registerAIRoutes(app: Hono, deps: AIRouteDeps) {
       );
     }
   });
+
+  if (deps.upgradeWebSocket) {
+    app.get(
+      "/api/v1/chat/ws",
+      deps.upgradeWebSocket((_c: unknown) => {
+        let streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+
+        return {
+          onMessage: async (event: any, ws: any) => {
+            try {
+              const raw = toTextMessage(event.data as string | ArrayBuffer | Uint8Array);
+              const parsed = JSON.parse(raw) as ChatWSRequestMessage;
+              if (!parsed || parsed.type !== "start") {
+                ws.send(
+                  JSON.stringify({
+                    event: "error",
+                    data: { message: "Invalid websocket request type" },
+                  }),
+                );
+                return;
+              }
+
+              const result = await executeChatRequest({
+                body: parsed.body || {},
+                acceptHeader: "text/event-stream",
+                deps: {
+                  awaitOrchestratorReady,
+                  awaitAIReady,
+                  getAIClient,
+                  getConfiguredSystemPrompt,
+                  orchestrator,
+                  db: {
+                    getConversation: async (id) => await pDB.getConversation(id),
+                    createConversation: async (value) =>
+                      await pDB.createConversation(value),
+                    getMessages: async (conversationId, options) =>
+                      await pDB.getMessages(conversationId, options),
+                    createMessage: async (value) => await pDB.createMessage(value),
+                    touchConversation: async (conversationId) =>
+                      await pDB.touchConversation(conversationId),
+                    setConversationTitle: async (conversationId, title) =>
+                      await pDB.setConversationTitle(conversationId, title),
+                    deleteMessagesByIds: async (conversationId, messageIds) =>
+                      await pDB.deleteMessagesByIds(conversationId, messageIds),
+                  },
+                  logger: chatLogger,
+                },
+              });
+
+              if (result.kind === "json") {
+                const payload = result.body as Record<string, unknown>;
+                if (result.status >= 400 || payload.success === false) {
+                  ws.send(
+                    JSON.stringify({
+                      event: "error",
+                      data: {
+                        message:
+                          typeof payload.message === "string"
+                            ? payload.message
+                            : "Chat request failed",
+                      },
+                    }),
+                  );
+                } else {
+                  const messages =
+                    payload.messages && typeof payload.messages === "object"
+                      ? (payload.messages as Record<string, unknown>)
+                      : null;
+                  const user =
+                    messages?.user && typeof messages.user === "object"
+                      ? (messages.user as Record<string, unknown>)
+                      : null;
+                  const assistant =
+                    messages?.assistant && typeof messages.assistant === "object"
+                      ? (messages.assistant as Record<string, unknown>)
+                      : null;
+
+                  ws.send(
+                    JSON.stringify({
+                      event: "meta",
+                      data: {
+                        conversationId:
+                          typeof payload.conversationId === "string"
+                            ? payload.conversationId
+                            : undefined,
+                        userMessageId:
+                          typeof user?.id === "string" ? user.id : undefined,
+                      },
+                    }),
+                  );
+                  ws.send(
+                    JSON.stringify({
+                      event: "done",
+                      data: {
+                        conversationId:
+                          typeof payload.conversationId === "string"
+                            ? payload.conversationId
+                            : undefined,
+                        userMessageId:
+                          typeof user?.id === "string" ? user.id : undefined,
+                        assistantMessageId:
+                          typeof assistant?.id === "string"
+                            ? assistant.id
+                            : undefined,
+                        response:
+                          typeof payload.response === "string"
+                            ? payload.response
+                            : undefined,
+                      },
+                    }),
+                  );
+                }
+                ws.close(1000, "complete");
+                return;
+              }
+
+              streamReader = result.stream.getReader();
+              const decoder = new TextDecoder();
+              let buffer = "";
+
+              while (true) {
+                const { value, done } = await streamReader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const parts = buffer.split("\n\n");
+                buffer = parts.pop() ?? "";
+
+                for (const part of parts) {
+                  const frame = parseSSEFrame(part);
+                  if (!frame) continue;
+                  ws.send(JSON.stringify(frame));
+                }
+              }
+
+              const tail = buffer.trim();
+              if (tail) {
+                const frame = parseSSEFrame(tail);
+                if (frame) ws.send(JSON.stringify(frame));
+              }
+
+              ws.close(1000, "complete");
+            } catch (error) {
+              ws.send(
+                JSON.stringify({
+                  event: "error",
+                  data: {
+                    message: (error as Error).message || "WebSocket chat failed",
+                  },
+                }),
+              );
+              ws.close(1011, "error");
+            }
+          },
+          onClose: () => {
+            void streamReader?.cancel().catch(() => undefined);
+            streamReader = null;
+          },
+        };
+      }),
+    );
+  }
 
   app.get("/api/v1/search", async (c) => {
     try {

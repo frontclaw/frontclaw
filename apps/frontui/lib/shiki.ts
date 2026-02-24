@@ -6,7 +6,7 @@ import {
   LanguageInput,
   SpecialLanguage,
 } from "shiki";
-import githubDark from "shiki/themes/github-dark-default.mjs";
+import draculaSoftTheme from "shiki/themes/dracula-soft.mjs";
 
 let highlighterPromise: ReturnType<typeof createHighlighter> | null = null;
 
@@ -344,8 +344,8 @@ const languages = [
 export function getHighlighter() {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: [githubDark],
-      langs: ["plaintext",],
+      themes: [draculaSoftTheme],
+      langs: ["plaintext"],
     });
   }
   return highlighterPromise;
@@ -358,7 +358,7 @@ export async function loadAssetsFromHighlighter(
   ],
 ) {
   await Promise.all([
-    highlighter.loadTheme("github-dark"),
+    highlighter.loadTheme("dracula-soft"),
     ...languages.map((lang) => highlighter.loadLanguage(lang)),
   ]);
 }

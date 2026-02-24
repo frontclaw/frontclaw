@@ -1,32 +1,40 @@
 "use client";
 
 import { useFetchConversationMessages } from "@/hooks/api";
-import { cloneConversation, submitFeedback } from "@/lib/frontclaw-api";
-import { ArrowDown, Loader2 } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
 import {
   getStreamState,
   hydrateConversationMessages,
   startUniversalStream,
   subscribeStreamState,
 } from "@/lib/chat-stream-runtime";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { cloneConversation, submitFeedback } from "@/lib/frontclaw-api";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowDown, Loader2 } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { ChatComposer } from "./chat-composer";
 import { ChatMessage } from "./chat-message";
 import { ChatEmptyState } from "./empty-state";
 import type { ChatWorkspaceProps } from "./types";
 
 export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
+  const queryClient = useQueryClient();
   const routedConversationId = conversationId ?? null;
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [clonedConversationId, setClonedConversationId] = useState<string | null>(
-    null,
-  );
-  const [streamConversationId, setStreamConversationId] = useState<string | null>(
-    routedConversationId,
-  );
+  const [clonedConversationId, setClonedConversationId] = useState<
+    string | null
+  >(null);
+  const [streamConversationId, setStreamConversationId] = useState<
+    string | null
+  >(routedConversationId);
 
   const lastElemRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -42,7 +50,11 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
   });
 
   const streamState = useSyncExternalStore(
-    (listener) => subscribeStreamState(streamConversationId || routedConversationId, listener),
+    (listener) =>
+      subscribeStreamState(
+        streamConversationId || routedConversationId,
+        listener,
+      ),
     () => getStreamState(streamConversationId || routedConversationId),
     () => getStreamState(streamConversationId || routedConversationId),
   );
@@ -144,7 +156,10 @@ export function ChatWorkspace({ conversationId }: ChatWorkspaceProps) {
         conversationId: targetConversationId || undefined,
         onConversationResolved: (resolvedConversationId) => {
           setStreamConversationId(resolvedConversationId);
+
           if (!routedConversationId) {
+            // Refresh sidebar conversation list
+            void queryClient.invalidateQueries({ queryKey: ["conversations"] });
             router.replace(`/c/${resolvedConversationId}`);
           }
         },

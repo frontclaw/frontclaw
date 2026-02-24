@@ -7,6 +7,7 @@ export type RouteDeps = {
   awaitOrchestratorReady: () => Promise<void>;
   refreshApplicationRuntime: () => Promise<RefreshResult>;
   isRefreshInProgress: () => boolean;
+  upgradeWebSocket?: any;
 };
 
 export type AIRouteDeps = RouteDeps & {

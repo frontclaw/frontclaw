@@ -76,6 +76,16 @@ export const WebhooksSchema = z.object({
 });
 export type Webhooks = z.infer<typeof WebhooksSchema>;
 
+export const ContextManagementSchema = z.object({
+  context_window_limit: z.number().int().positive().optional(),
+  compact_when_tokens_reach: z.number().int().positive().optional(),
+  compact_when_ratio: z.number().positive().max(1).optional(),
+  auto_compact: z.boolean().optional(),
+  preserve_recent_messages: z.number().int().min(1).optional(),
+  target_ratio_after_compact: z.number().positive().max(1).optional(),
+});
+export type ContextManagement = z.infer<typeof ContextManagementSchema>;
+
 export const AiModelsSchema = z.object({
   embeddings: EmbeddingsSchema.optional(),
   chat: ChatSchema.optional(),
@@ -115,6 +125,7 @@ export const FrontClawSchemaSchema = z
     features: FeaturesSchema.optional().default({}),
     embedded_box: EmbeddedBoxSchema.optional().default({}),
     webhooks: WebhooksSchema.optional().default({}),
+    context_management: ContextManagementSchema.optional().default({}),
   })
   .strict();
 export type FrontClawSchema = z.infer<typeof FrontClawSchemaSchema>;

@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { primaryDB } from ".";
 import {
   ConversationCreate,
@@ -111,4 +111,21 @@ export const getMessages = async (
     .orderBy(messages.createdAt)
     .limit(limit)
     .offset(offset);
+};
+
+export const deleteMessagesByIds = async (
+  conversationId: string,
+  messageIds: string[],
+) => {
+  if (messageIds.length === 0) return 0;
+  const deleted = await db
+    .delete(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        inArray(messages.id, messageIds),
+      ),
+    )
+    .returning({ id: messages.id });
+  return deleted.length;
 };

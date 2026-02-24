@@ -33,6 +33,10 @@ export function registerSystemRoutes(app: Hono, deps: RouteDeps) {
         items: "/api/v1/items",
         conversations: "/api/v1/conversations",
         messages: "/api/v1/conversations/:conversationId/messages",
+        compactConversation:
+          "/api/v1/conversations/:conversationId/compact",
+        conversationMetrics:
+          "/api/v1/conversations/:conversationId/metrics",
         interactions: "/api/v1/interactions",
         autocomplete: "/api/v1/autocomplete",
         search: "/api/v1/search",

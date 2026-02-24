@@ -1,108 +1,12 @@
+import {
+  readPluginCatalog,
+  setPluginEnabled,
+} from "@workspace/core";
 import type { Hono } from "hono";
-import fs from "node:fs";
 import path from "node:path";
 import type { RouteDeps } from "./types";
 
 const PLUGINS_DIR = path.resolve(import.meta.dirname, "../../../../plugins");
-
-type PluginCatalogEntry = {
-  id: string;
-  name?: string;
-  version?: string;
-  description?: string;
-  priority?: number;
-  runtime?: string;
-  permissions?: unknown;
-  tags?: string[];
-  manifest?: Record<string, unknown>;
-  enabled: boolean;
-  active: boolean;
-};
-
-function readPluginCatalog(): PluginCatalogEntry[] {
-  if (!fs.existsSync(PLUGINS_DIR)) {
-    return [];
-  }
-
-  const entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true });
-  const plugins: PluginCatalogEntry[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-
-    const pluginDir = path.join(PLUGINS_DIR, entry.name);
-    const manifestPath = path.join(pluginDir, "frontclaw.json");
-    if (!fs.existsSync(manifestPath)) continue;
-
-    try {
-      const raw = fs.readFileSync(manifestPath, "utf-8");
-      const manifest = JSON.parse(raw) as Record<string, unknown>;
-      const id =
-        typeof manifest.id === "string" && manifest.id.trim()
-          ? manifest.id
-          : entry.name;
-      const enabled = manifest.enabled !== false;
-
-      plugins.push({
-        id,
-        name: typeof manifest.name === "string" ? manifest.name : undefined,
-        version:
-          typeof manifest.version === "string" ? manifest.version : undefined,
-        description:
-          typeof manifest.description === "string"
-            ? manifest.description
-            : undefined,
-        priority:
-          typeof manifest.priority === "number" ? manifest.priority : undefined,
-        runtime:
-          typeof manifest.runtime === "string" ? manifest.runtime : undefined,
-        permissions: manifest.permissions,
-        tags: Array.isArray(manifest.tags)
-          ? manifest.tags.filter((tag) => typeof tag === "string")
-          : undefined,
-        manifest,
-        enabled,
-        active: false,
-      });
-    } catch {
-      // Ignore malformed plugin manifests in catalog listing.
-    }
-  }
-
-  plugins.sort((a, b) => a.id.localeCompare(b.id));
-  return plugins;
-}
-
-function writePluginEnabled(pluginId: string, enabled: boolean): void {
-  if (!fs.existsSync(PLUGINS_DIR)) {
-    throw new Error("Plugin not found");
-  }
-
-  const entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = path.join(PLUGINS_DIR, entry.name, "frontclaw.json");
-    if (!fs.existsSync(manifestPath)) continue;
-
-    try {
-      const raw = fs.readFileSync(manifestPath, "utf-8");
-      const manifest = JSON.parse(raw) as Record<string, unknown>;
-      if (manifest.id !== pluginId) continue;
-
-      manifest.enabled = enabled;
-      fs.writeFileSync(
-        manifestPath,
-        `${JSON.stringify(manifest, null, 2)}\n`,
-        "utf-8",
-      );
-      return;
-    } catch {
-      // Skip malformed manifest and keep scanning.
-    }
-  }
-
-  throw new Error("Plugin not found");
-}
 
 export function registerPluginRoutes(app: Hono, deps: RouteDeps) {
   const {
@@ -115,7 +19,7 @@ export function registerPluginRoutes(app: Hono, deps: RouteDeps) {
   app.get("/api/v1/plugins", async (c) => {
     await awaitOrchestratorReady();
     const activeIds = new Set(orchestrator.getManifests().map((m) => m.id));
-    const catalog = readPluginCatalog().map((plugin) => ({
+    const catalog = readPluginCatalog(PLUGINS_DIR).map((plugin) => ({
       ...plugin,
       active: activeIds.has(plugin.id),
     }));
@@ -161,7 +65,7 @@ export function registerPluginRoutes(app: Hono, deps: RouteDeps) {
     }
 
     try {
-      writePluginEnabled(pluginId, body.enabled);
+      setPluginEnabled(PLUGINS_DIR, pluginId, body.enabled);
       const refresh = await refreshApplicationRuntime();
       const manifest = orchestrator.getManifest(pluginId);
 
